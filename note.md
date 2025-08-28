@@ -31,7 +31,7 @@ Python核心库：
 
 `conda init`
 
-error:
+**error:**
 
 > . : 无法加载文件 D:\Documents\WindowsPowerShell\profile.ps1，因为在此系统上禁止运行脚本。有关详细信息，请参阅 https:/go.microsoft.com/fwlink/?LinkID=135170 中的 
 about_Execution_Policies。
@@ -42,13 +42,13 @@ about_Execution_Policies。
     + FullyQualifiedErrorId : UnauthorizedAccess
 PS D:\Desktop\quant> 
 
-solve:
+**solve:**
 
 `Set-ExecutionPolicy RemoteSigned` in sudo
 
 `conda env list` list all environments
 
-`conda create -n <env_name> python=3.8` create a new environment
+`conda create -n <env_name> python=3.13.5` create a new environment
 
 `conda activate <env_name>` activate the environment
 
@@ -164,8 +164,8 @@ OUT
 
 ##### install 
 
-- CUDA 12.6
-`pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126`
+- CUDA 12.9
+`pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu129`
 
 - CPU
 `pip3 install torch torchvision`
