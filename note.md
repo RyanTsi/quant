@@ -140,3 +140,32 @@ OUT
 | 年初至今涨跌幅   | float64  | 注意单位: %                  |
 
 
+### 8.28
+
+#### Data of Core
+
+1. 收盘价，成交量
+2. 开盘价，最高，最低
+3. 振幅，涨跌幅，涨跌额，换手率
+
+#### 时序数据分析 Model
+
+1. RNN
+2. LSTM
+3. GRU
+   
+时序大模型
+1. VLDB 2025
+2. ICLR 2025
+3. NIPS 2024
+4. ICML 2024
+
+#### PyTorch
+
+##### install 
+
+- CUDA 12.6
+`pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126`
+
+- CPU
+`pip3 install torch torchvision`
