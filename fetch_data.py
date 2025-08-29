@@ -7,6 +7,7 @@ start_date = "20100101"
 end_date = "20250827"
 period = "daily"
 adjust = "hfq"
+save_path = "history/fiveyear_stock_data"
 
 path = "all_stock_code.pkl"
 
@@ -22,10 +23,10 @@ for symbol in all_stock_code:
             
             if not stock_zh_a_hist_df.empty:
                 print(f"{symbol} 获取成功")
-                stock_zh_a_hist_df.to_excel(f"history/{symbol}.xlsx", index=False)
+                stock_zh_a_hist_df.to_excel(f"{save_path}/{symbol}.xlsx", index=False)
                 success = True
                 # 每次请求后固定随机休眠（0-2秒）
-                time.sleep(random.uniform(0, 2))
+                time.sleep(random.uniform(0, 1.5))
             else:
                 print(f"{symbol} not found")
                 success = True  # 空数据视为处理完成，不再重试

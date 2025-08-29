@@ -52,6 +52,8 @@ PS D:\Desktop\quant>
 
 `conda activate <env_name>` activate the environment
 
+`conda remove --name <env_name> --all` remove an environment 
+
 #### install packages
 
 `pip install numpy pandas matplotlib`
