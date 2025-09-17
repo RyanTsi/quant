@@ -2,13 +2,15 @@ import akshare as ak
 import time
 import random
 import pickle
+import os
 
 start_date = "20100101"
-end_date = "20250827"
+end_date = "20250916"
 period = "daily"
 adjust = "hfq"
-save_path = "history/fiveyear_stock_data"
-
+save_path = "history/past15year_stock_data"
+if(os.path.exists(save_path) == False):
+    os.makedirs(save_path)
 path = "all_stock_code.pkl"
 
 all_stock_code = pickle.load(open(path, "rb"))
@@ -16,7 +18,11 @@ all_stock_code = pickle.load(open(path, "rb"))
 for symbol in all_stock_code:
     retry = 0
     success = False
-    
+    file_path = os.path.join(save_path, f"{symbol}.xlsx")
+    print(file_path)
+    if os.path.exists(file_path):
+        print(f"{symbol} 数据已存在, skip")
+        continue
     while retry <= 3 and not success:
         try:
             stock_zh_a_hist_df = ak.stock_zh_a_hist(symbol, period, start_date, end_date, adjust)
