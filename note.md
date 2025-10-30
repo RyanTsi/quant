@@ -171,3 +171,7 @@ OUT
 
 - CPU
 `pip3 install torch torchvision`
+
+### 10.30
+
+get news -> deekseek
