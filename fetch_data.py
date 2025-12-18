@@ -5,10 +5,10 @@ import pickle
 import os
 
 start_date = "20100101"
-end_date = "20250916"
+end_date = "202501214"
 period = "daily"
 adjust = "hfq"
-save_path = "history/past15year_stock_data"
+save_path = "history/past15year_stock_data_daily"
 if(os.path.exists(save_path) == False):
     os.makedirs(save_path)
 path = "all_stock_code.pkl"
@@ -18,7 +18,7 @@ all_stock_code = pickle.load(open(path, "rb"))
 for symbol in all_stock_code:
     retry = 0
     success = False
-    file_path = os.path.join(save_path, f"{symbol}.xlsx")
+    file_path = os.path.join(save_path, f"{symbol}.csv")
     print(file_path)
     if os.path.exists(file_path):
         print(f"{symbol} 数据已存在, skip")
@@ -29,7 +29,7 @@ for symbol in all_stock_code:
             
             if not stock_zh_a_hist_df.empty:
                 print(f"{symbol} 获取成功")
-                stock_zh_a_hist_df.to_excel(f"{save_path}/{symbol}.xlsx", index=False)
+                stock_zh_a_hist_df.to_csv(f"{save_path}/{symbol}.csv", index=False)
                 success = True
                 # 每次请求后固定随机休眠（0-2秒）
                 time.sleep(random.uniform(0, 1.5))
@@ -42,7 +42,7 @@ for symbol in all_stock_code:
             print(e)
             print(f"{symbol} 获取失败（第{retry}次重试）")
             
-            if retry > 3:
+            if retry > 10:
                 print(f"{symbol} 达到最大重试次数")
                 break
                 
