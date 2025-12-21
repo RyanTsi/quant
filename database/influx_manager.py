@@ -1,4 +1,5 @@
 from datetime import datetime
+from reactivex.scheduler import ThreadPoolScheduler
 from typing import Dict, List, Optional, Union
 import pandas as pd
 from influxdb_client_3 import (
@@ -8,8 +9,6 @@ from influxdb_client_3 import (
     Point,
     InfluxDBError,
 )
-
-
 
 class StockData:
     """
@@ -53,7 +52,14 @@ class InfluxDBConfig:
 class InfluxDBManager:
     STOCK_MEASUREMENT = "stock_prices"
     def __init__(self, config: InfluxDBConfig, callbacks: InfluxDBCallbacks):
-        write_options = WriteOptions()
+        write_options = WriteOptions(
+            batch_size=40_000,
+            flush_interval=5_000,
+            max_retry_delay=30_000,
+            max_retry_time=300_000,
+            max_close_wait=10000000,
+            write_scheduler=ThreadPoolScheduler(max_workers=12)
+        )
         wco = write_client_options( success_callback=callbacks.success,
                             error_callback=callbacks.error,
                             retry_callback=callbacks.retry,
@@ -62,6 +68,7 @@ class InfluxDBManager:
         print(f"InfluxDB client initialized for {config.host}/{config.database}")
     
     def create_stock_point(
+        self,
         stock_data : StockData,
         measurement_name: str = "stock_prices"
     ) -> Point:
@@ -101,7 +108,11 @@ class InfluxDBManager:
         except Exception as e:
             print(f"❌ Failed to initiate single point write: {e}")
     
-    def write_stock_batch(self, stock_data_list: List[StockData], measurement_name: str = "stock_prices"):
+    def write_stock_batch(
+        self, 
+        stock_data_list: List[StockData], 
+        measurement_name: str = "stock_prices"
+    ):
         """
         批量写入股票数据列表。
         
@@ -131,26 +142,98 @@ class InfluxDBManager:
         except Exception as e:
             print(f"❌ Failed to batch write stock data: {e}")
 
-
-
-    def query_stock_data(self, query: str, query_language: str = "sql") -> Optional[pd.DataFrame]:
+    def get_stock_code_list_by_date(
+        self, 
+        target_date: datetime
+    ) -> Optional[List[str]]:
         """
-        从 InfluxDB 查询数据并返回 Pandas DataFrame。
+        查询指定日期有数据的所有股票代码。
         
-        :param query: SQL 或 InfluxQL 查询字符串。
-        :param query_language: 查询语言 ('sql' 或 'influxql')。
-        :return: 包含查询结果的 Pandas DataFrame，如果查询失败则返回 None。
+        :param target_date: 目标日期 (datetime 对象)
+        :return: 股票代码列表或 None
         """
-        print(f"\n--- Executing Query ({query_language.upper()}) ---")
+        
+        # 1. 构造 SQL 语句
+        query_str = f"""
+            SELECT DISTINCT("stock_code") FROM "{self.STOCK_MEASUREMENT}" 
+            WHERE time >= $start AND time < $end
+        """
+        
+        # 2. 定义查询参数
+        start_of_day = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_of_day = start_of_day + pd.Timedelta(days=1)
+        params = {
+            "start": start_of_day.isoformat(),
+            "end": end_of_day.isoformat()
+        }
+
+        print(f"🔍 Querying stock codes for date {start_of_day.date()}...")
+
         try:
-            # client.query 返回 FlightRecordBatchReader
-            result_reader = self.client.query(query=query, language=query_language)
-            
-            # 使用 .read_pandas() 转换为 DataFrame
-            df = result_reader.read_pandas()
-            print(f"Query successful. Returned {len(df)} rows.")
-            return df
-            
+            # 3. 执行查询
+            result = self.client.query(
+                query=query_str, 
+                language="sql", 
+                mode="pandas", 
+                query_parameters=params
+            )
+            if result is not None and not result.empty:
+                stock_codes = result['stock_code'].unique().tolist()
+                return stock_codes
+            else:
+                return None
+        except Exception as e:
+            print(f"❌ Query failed: {e}")
+            return None
+
+    def get_stock_data_by_range(
+        self, 
+        stock_code: str, 
+        start_time: datetime, 
+        end_time: datetime, 
+        mode: str = "pandas"
+    ) -> Optional[pd.DataFrame]:
+        """
+        查询特定股票在指定时间段的数据。
+        
+        :param stock_code: 股票代码 (例如 'sh600000')
+        :param start_time: 开始时间 (datetime 对象)
+        :param end_time: 结束时间 (datetime 对象)
+        :param mode: 返回模式，建议用 'pandas'
+        :return: 包含数据的 DataFrame 或其他指定格式
+        """
+        
+        # 1. 构造 SQL 语句
+        # 注意：InfluxDB 3.0 中，measurement 相当于表名，tag 相当于列
+        # 使用参数化查询防止注入（虽然是内部使用，但这是好习惯）
+        query_str = f"""
+            SELECT * FROM "{self.STOCK_MEASUREMENT}" 
+            WHERE "stock_code" = $code 
+            AND time >= $start 
+            AND time <= $end
+            ORDER BY time ASC
+        """
+        
+        # 2. 定义查询参数
+        # InfluxDB 3.0 的时间戳需要是 RFC3339 格式或 ISO 格式字符串
+        params = {
+            "code": stock_code,
+            "start": start_time.isoformat(),
+            "end": end_time.isoformat()
+        }
+
+        print(f"🔍 Querying data for {stock_code} from {params['start']} to {params['end']}...")
+
+        try:
+            # 3. 执行查询
+            # 使用 self.client.query，它是你之前展示的那个函数
+            result = self.client.query(
+                query=query_str, 
+                language="sql", 
+                mode=mode, 
+                query_parameters=params
+            )
+            return result
         except Exception as e:
             print(f"❌ Query failed: {e}")
             return None
