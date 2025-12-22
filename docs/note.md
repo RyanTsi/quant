@@ -175,3 +175,8 @@ OUT
 ### 10.30
 
 get news -> deekseek
+
+
+### 12.21
+
+tensorboard --logdir ./tensorboard_logs/

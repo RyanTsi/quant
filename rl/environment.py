@@ -66,7 +66,7 @@ class SimpleStockEnv(gym.Env):
         # self.today 是当前指针，初始位置需要先预留 WINDOW_SIZE 的历史数据
         self.today = start_index + WINDOW_SIZE
         # parameters
-        self.target_value = 1.1 # 目标：资产增值到 110%
+        self.target_value = 1.1 # 目标：资产增值到 130%
         self.new_high_reward = NEW_HIGH_REWARD
 
         # 4. 初始化状态历史
@@ -137,15 +137,18 @@ class SimpleStockEnv(gym.Env):
             "today": self.today
         }
         # 奖励 = 这一段时间内的资产增值比率 + 达到新高奖励 + 大幅度下跌惩罚
-        reward = np.log(current_net_worth / prev_net_worth + 1e-8) * 20
-        reward = np.clip(reward, -5.0, 5.0)
+        reward = np.log(current_net_worth / prev_net_worth + 1e-8) * 10
+        return_rate = np.sinh((current_net_worth - prev_net_worth) / prev_net_worth * 10)
         # 大幅度下跌惩罚
-        if (current_net_worth - prev_net_worth) / prev_net_worth <= -0.08:
-            reward -= 20
-        # if current_net_worth >= ORIGINAL_MONEY * self.target_value:
-        #     reward += self.new_high_reward
-        #     self.new_high_reward *= 1.1 # 提高奖励
-        #     self.target_value    *= 1.1 # 提高目标
+        if return_rate < 0:
+            k = 0.3
+        else:
+            k = 0.3
+            if current_net_worth >= ORIGINAL_MONEY * self.target_value:
+                reward += self.new_high_reward
+                self.target_value = current_net_worth / ORIGINAL_MONEY * 1.1 # 提高目标
+        reward += return_rate * k
+        reward = np.clip(reward, -5.0, 5.0)
 
         # 更新历史状态
         delta_ratio = np.tanh((next_price - current_price) / current_price * INCR_PARA)

@@ -63,10 +63,10 @@ train_range = (datetime(2010, 1, 1), datetime(2021, 12, 31))
 val_range   = (datetime(2022, 1, 1), datetime(2023, 12, 31))
 test_range  = (datetime(2024, 1, 1), datetime(2025, 12, 31))
 
-SEED = 215450649
+SEED = 134352
 np.random.seed(SEED)
 
-MODEL_PATH = "sac_random_stock_model_1000.zip"
+MODEL_PATH = "sac_random_stock_model_6.zip"
 LOG_DIR = "./tensorboard_logs/"
 
 def make_env(df_list, rank, seed=0):
@@ -79,7 +79,6 @@ def make_env(df_list, rank, seed=0):
     return _init
 
 if __name__ == "__main__":
-    np.random.seed(SEED) 
     
     # 1. 初始化 InfluxDB
     config = InfluxDBConfig(HOST, DATABASE, TOKEN)
@@ -136,7 +135,7 @@ if __name__ == "__main__":
             learning_starts=1000,
             batch_size=256,
             ent_coef='auto',
-            target_entropy='auto',
+            target_entropy=-0.5,
             verbose=1,
             device="cuda"
         )
