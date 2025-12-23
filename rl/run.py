@@ -1,3 +1,4 @@
+import random
 import rl.prehandle
 import numpy as np
 from datetime import datetime
@@ -21,23 +22,28 @@ class TensorboardCallback(BaseCallback):
         # 获取当前 step 的 info 字典
         # self.locals['infos'] 是一个列表，因为可能有多个并行环境
         info = self.locals['infos'][0]
-        if "net_worth" in info:
-            # 将资产净值记录到 TensorBoard 的 "Custom/NetWorth" 路径下
-            self.logger.record("custom/net_worth", info["net_worth"])
-        if "shares" in info:
-            self.logger.record("custom/shares_held", info["shares"])
-        if "r_base" in info:
-            self.logger.record("custom/reward_base", info["r_base"])
-        if "r_risk_hold" in info:
-            self.logger.record("custom/reward_risk_hold", info["r_risk_hold"])
-        if "r_risk_down" in info:
-            self.logger.record("custom/reward_risk_down", info["r_risk_down"])
-        if "r_act_pen" in info:
-            self.logger.record("custom/reward_action_penalty", info["r_act_pen"])
-        if "r_pos_unc" in info:
-            self.logger.record("custom/reward_position_uncertainty", info["r_pos_unc"])
-        if "drawdown" in info:
-            self.logger.record("custom/drawdown", info["drawdown"])
+        for x in info:
+            path = "custom/" + x
+            self.logger.record(path, info[x])
+        # if "net_worth" in info:
+        #     # 将资产净值记录到 TensorBoard 的 "Custom/NetWorth" 路径下
+        #     self.logger.record("custom/net_worth", info["net_worth"])
+        # if "shares" in info:
+        #     self.logger.record("custom/shares_held", info["shares"])
+        # if "r_base" in info:
+        #     self.logger.record("custom/reward_base", info["r_base"])
+        # if "r_risk_hold" in info:
+        #     self.logger.record("custom/reward_risk_hold", info["r_risk_hold"])
+        # if "r_risk_down" in info:
+        #     self.logger.record("custom/reward_risk_down", info["r_risk_down"])
+        # if "r_act_pen" in info:
+        #     self.logger.record("custom/reward_action_penalty", info["r_act_pen"])
+        # if "r_pos_unc" in info:
+        #     self.logger.record("custom/reward_position_uncertainty", info["r_pos_unc"])
+        # if "drawdown" in info:
+        #     self.logger.record("custom/drawdown", info["drawdown"])
+        # if "sigma" in info:
+        #     self.logger.record("custom/sigma", info["sigma"])
         return True
     
 def get_data_with_cache(manager, codes, start_date, end_date, cache_name="stock_data_cache.pkl"):
@@ -89,9 +95,17 @@ if __name__ == "__main__":
     manager = InfluxDBManager(config, InfluxDBCallbacks())
     
     # 2. 获取股票列表并随机筛选
+    valid_prefixes = ('600', '601', '603', '605', '000', '001', '002', '003')
     all_stock_codes = manager.get_stock_code_list_by_date(target_date=datetime(2025, 12, 12))
-    selected_codes = np.random.choice(all_stock_codes, size=1200, replace=False)
-
+    main_board_codes = [code for code in all_stock_codes if code.startswith(valid_prefixes)]
+    print(f"📊 原始股票总数: {len(all_stock_codes)}")
+    print(f"🏛️ 筛选后主板/中小板数量: {len(main_board_codes)}")
+    if len(main_board_codes) >= 1200:
+        selected_codes = np.random.choice(main_board_codes, size=1200, replace=False)
+    else:
+        print(f"⚠️ 警告：符合条件的股票仅有 {len(main_board_codes)} 只，不足 1200，将全部选取。")
+        selected_codes = main_board_codes
+        
     # 3. 通过缓存获取数据
     print("正在加载训练集...")
     train_dfs = get_data_with_cache(manager, selected_codes, train_range[0], train_range[1], "train_data.pkl")
@@ -106,7 +120,17 @@ if __name__ == "__main__":
     # ------------ 环境构建 ------------ 
 
     num_cpu = 20
-    train_env = SubprocVecEnv([make_env(train_dfs, i, SEED) for i in range(num_cpu)])
+    subset_size = 400  # 每个进程负责 400 只股票
+    train_env_list = []
+    val_env_list = []
+    for i in range(num_cpu):
+        t_idx_subset = random.sample(train_dfs, subset_size) 
+        train_env_list.append(make_env(t_idx_subset, i, SEED))
+    for i in range(num_cpu // 2):
+        v_idx_subset = random.sample(val_dfs, int(subset_size * 1.5)) 
+        val_env_list.append(make_env(v_idx_subset, i, SEED))
+
+    train_env = SubprocVecEnv(train_env_list)
     train_env = VecMonitor(train_env, TRAIN_LOG_DIR)
 
     val_env = SubprocVecEnv([make_env(val_dfs, i, SEED + 7324) for i in range(num_cpu // 2)])
@@ -120,14 +144,14 @@ if __name__ == "__main__":
         val_env,
         best_model_save_path='./best_model/',
         log_path=VAL_LOG_DIR,
-        eval_freq=10000,        # 每训练 1万步(env steps) 验证一次
+        eval_freq=756,          # 每训练 1万步(env steps) 验证一次
         n_eval_episodes=50,     # 每次验证跑 50 局取平均，消除随机性
         deterministic=True,     # 验证时由确定性策略(去除随机探索)，看真实实力
         render=False
     )
 
     # B. 定期保存 (Checkpoint)
-    checkpoint_callback = CheckpointCallback(save_freq=50000, save_path='./checkpoints/', name_prefix='sac_stock')
+    checkpoint_callback = CheckpointCallback(save_freq=4536, save_path='./checkpoints/', name_prefix='sac_stock')
     
     # C. Tensorboard 记录细节
     tb_callback = TensorboardCallback()
@@ -141,16 +165,16 @@ if __name__ == "__main__":
         "MlpPolicy", 
         train_env, 
         tensorboard_log=TRAIN_LOG_DIR,
-        learning_rate=3e-4, 
-        buffer_size=1_000_000, 
-        learning_starts=5000,
-        batch_size=4096,
-        train_freq=(100, "step"),
-        gradient_steps=100,
-        ent_coef='auto',
-        target_entropy=-0.5,
+        # learning_rate=2e-4, 
+        # buffer_size=1_000_000, 
+        # learning_starts=5000,
+        # batch_size=1024,
+        # train_freq=(22, "step"),
+        # gradient_steps=22,
+        # ent_coef='auto',
+        # target_entropy='auto',
         verbose=1,
-        use_sde=True,
+        # use_sde=True,
         device="cuda"
     )
     print("开始训练...")

@@ -57,6 +57,20 @@ class SimpleStockEnv(gym.Env):
         # 4. 初始化参数
         self.target_value = NEW_HIGH_TARGET
         self.new_high_reward = NEW_HIGH_REWARD
+        self.times = 0
+        self.ave_r_base = 0
+        self.ave_r_risk_hold = 0
+        self.ave_r_risk_down = 0
+        self.ave_r_action_penalty = 0
+        self.ave_r_position_uncertainty = 0
+        self.ave_r_new_high = 0
+        
+        self.max_r_base = 0
+        self.max_r_risk_hold = 0
+        self.max_r_risk_down = 0
+        self.max_r_action_penalty = 0
+        self.max_r_position_uncertainty = 0
+        self.max_r_new_high = 0
 
         # 5. 初始化状态历史
         self.stock_history = []
@@ -119,21 +133,20 @@ class SimpleStockEnv(gym.Env):
         # --- 4. Reward 计算核心 ---
         
         # A. 基础收益 (Base Reward)
-        r_base = np.log((current_net_worth + 1e-8) / (prev_net_worth + 1e-8)) * 10 # 绝对值 1 左右
-
+        # r_base = np.log(next_price / current_price) * current_pos_ratio * 10 # 绝对值 2 左右
+        r_base = np.log(current_net_worth / prev_net_worth) * 10
         # B. 风险调整 (Risk-Adjusted Reward)
         # 获取过去 WINDOW_SIZE 天的价格（如果没有 WINDOW_SIZE 天，就取尽量多的天数）
-        lookback = WINDOW_SIZE
-        start_idx = max(0, self.today - lookback)
+        start_idx = max(0, self.today - WINDOW_SIZE)
         window_prices = self.prices[start_idx : self.today + 1]
         recent_prices_max = np.max(window_prices)
         max_idx_in_window = np.argmax(window_prices)
         days_since_high = (len(window_prices) - 1) - max_idx_in_window
-        sigma = np.std(self.stock_history) # 最大 0.1 左右
+        sigma = np.std(self.stock_history) # 最大 0.25 左右
 
         # B1. 持有风险惩罚 (Hold Risk)
         # 仓位越重，且市场波动越大，惩罚越重
-        r_risk_hold = 10 * current_pos_ratio * sigma # 绝对值 1 左右
+        r_risk_hold = 4 * current_pos_ratio * sigma # 绝对值 1 左右
 
         # B2. 下行风险/回撤惩罚 (Drawdown Penalty)
         # 如果当前价格距离 90 天高点很远，且还持有重仓，Q: 90 天内价格走向突变，应该重仓但是会被惩罚，是否应该乘上离最高点的时间跨度，越远这个权重越低？
@@ -159,17 +172,19 @@ class SimpleStockEnv(gym.Env):
 
         # --- 5. 总 Reward 汇总 ---
         # 权重分配：
-        # Base: 2.0 (主导)
+        # Base: 1.0 (主导)
         # Risk: -0.1, -0.1
         # Empty: -0.01
         # Position Uncertainty: -0.01
         # NewHigh: 1.0
+        r_base *= 1
+        r_risk_hold *= 0
+        r_risk_down *= 0
+        r_action_penalty *= 0
+        r_position_uncertainty *= 0
+        r_new_high *= 0
 
-        total_reward = 2.0 * r_base + \
-                      -0.1 *  r_risk_hold + -0.1 * r_risk_down + \
-                     -0.01 * r_action_penalty + \
-                     -0.01 * r_position_uncertainty + \
-                       0.3 * r_new_high
+        total_reward =  r_base + r_risk_hold + r_risk_down + r_action_penalty + r_position_uncertainty + r_new_high
         
         # # 稍微给一点生存奖励，防止因为全是负分而自杀
         # total_reward += 0.001 
@@ -177,16 +192,44 @@ class SimpleStockEnv(gym.Env):
         # 裁剪，防止梯度爆炸
         total_reward = np.clip(total_reward, -10.0, 10.0)
 
+        self.max_r_base = max(self.max_r_base, abs(r_base))
+        self.max_r_risk_hold = max(self.max_r_risk_hold, abs(r_risk_hold))
+        self.max_r_risk_down = max(self.max_r_risk_down, abs(r_risk_down))
+        self.max_r_action_penalty = max(self.max_r_action_penalty, abs(r_action_penalty))
+        self.max_r_position_uncertainty = max(self.max_r_position_uncertainty, abs(r_position_uncertainty))
+        self.max_r_new_high = max(self.max_r_new_high, abs(r_new_high))
+
+        self.ave_r_base = self.ave_r_base * self.times + r_base
+        self.ave_r_risk_hold = self.ave_r_risk_hold * self.times + r_risk_hold
+        self.ave_r_risk_down = self.ave_r_risk_down * self.times + r_risk_down
+        self.ave_r_action_penalty = self.ave_r_action_penalty * self.times + r_action_penalty
+        self.ave_r_position_uncertainty = self.ave_r_position_uncertainty * self.times + r_position_uncertainty
+        self.ave_r_new_high = self.ave_r_new_high * self.times + r_new_high
+        
+        self.times += 1
+
+        self.ave_r_base /= self.times
+        self.ave_r_risk_hold /= self.times
+        self.ave_r_risk_down /= self.times
+        self.ave_r_action_penalty /= self.times
+        self.ave_r_position_uncertainty /= self.times
+        self.ave_r_new_high /= self.times
 
         info = {
             "net_worth": float(current_net_worth),
-            "shares": self.number_of_shares,
-            "r_base": r_base,
-            "r_risk_hold": r_risk_hold,
-            "r_risk_down": r_risk_down,
-            "r_act_pen": r_action_penalty,
-            "r_pos_unc": r_position_uncertainty,
-            "drawdown": drawdown * decay_factor # 观察一下衰减后的回撤是多少
+            "ave_r_base": self.ave_r_base,
+            "ave_r_risk_hold": self.ave_r_risk_hold,
+            "ave_r_risk_down": self.ave_r_risk_down,
+            "ave_r_act_pen": self.ave_r_action_penalty,
+            "ave_r_pos_unc": self.ave_r_position_uncertainty,
+            "ave_r_new_high": self.ave_r_new_high,
+            "max_r_base": self.max_r_base,
+            "max_r_risk_hold": self.max_r_risk_hold,
+            "max_r_risk_down": self.max_r_risk_down,
+            "max_r_action_penalty": self.max_r_action_penalty,
+            "max_r_position_uncertainty": self.max_r_position_uncertainty,
+            "max_r_new_high": self.max_r_new_high,
+            "pos_ratios": current_pos_ratio
         }
 
         # 更新历史状态

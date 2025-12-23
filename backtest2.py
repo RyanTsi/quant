@@ -25,7 +25,7 @@ class SingleStockTestEnv(SimpleStockEnv):
         self.current_df = self.df_list[0]
         self.prices = self.current_df['收盘'].values.astype(np.float32)
         # 获取日期用于画图
-        self.dates = pd.to_datetime(self.current_df['日期'].values)
+        self.dates = pd.to_datetime(self.current_df['time'].values)
         
         total_len = len(self.prices)
         
@@ -41,6 +41,21 @@ class SingleStockTestEnv(SimpleStockEnv):
         self.number_of_shares = 0
         self.target_value = NEW_HIGH_TARGET
         self.new_high_reward = NEW_HIGH_REWARD
+        self.times = 0
+        self.ave_r_base = 0
+        self.ave_r_risk_hold = 0
+        self.ave_r_risk_down = 0
+        self.ave_r_action_penalty = 0
+        self.ave_r_position_uncertainty = 0
+        self.ave_r_new_high = 0
+        
+        self.max_r_base = 0
+        self.max_r_risk_hold = 0
+        self.max_r_risk_down = 0
+        self.max_r_action_penalty = 0
+        self.max_r_position_uncertainty = 0
+        self.max_r_new_high = 0
+        self.pos_ratio = 0
 
         # 初始化历史
         self.stock_history = []
@@ -70,10 +85,10 @@ def plot_backtest_results(stock_code, records):
     sell_x, sell_y = [], []
     
     for i, act in enumerate(actions):
-        if act > 0.05: # 只有明显买入才标记
+        if act > 0.15: # 只有明显买入才标记
             buy_x.append(dates[i])
             buy_y.append(prices[i])
-        elif act < -0.05: # 只有明显卖出才标记
+        elif act < -0.15: # 只有明显卖出才标记
             sell_x.append(dates[i])
             sell_y.append(prices[i])
 
@@ -130,7 +145,7 @@ def plot_backtest_results(stock_code, records):
 # --- 3. 主程序 ---
 if __name__ == "__main__":
     # 配置
-    target_stocks = ["600519.SH", "300750.SZ"] # 茅台，宁德时代
+    target_stocks = ["600519", "300750", "300496", "000001", "600519", "000651", "002475", "601318", "000333", "002594", "601166", "000725"]
     test_start = datetime(2024, 1, 1)
     test_end = datetime(2025, 12, 12)
     
@@ -182,7 +197,7 @@ if __name__ == "__main__":
             records['prices'].append(current_price)
             records['net_worths'].append(info['net_worth'])
             records['actions'].append(float(action[0])) # 记录动作数值
-            records['pos_ratios'].append(info['pos_ratio']) # 这里的 key 要和你 step 返回的 info 一致
+            records['pos_ratios'].append(info['pos_ratios']) # 这里的 key 要和你 step 返回的 info 一致
 
         # 6. 画图
         print(f"✅ 回测完成，正在绘图...")
