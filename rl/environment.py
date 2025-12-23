@@ -1,12 +1,6 @@
-from datetime import datetime
 import numpy as np
-import pandas as pd
 import gymnasium as gym
 from gymnasium import spaces
-from stable_baselines3 import SAC
-from stable_baselines3.common.env_checker import check_env
-import matplotlib.pyplot as plt
-from database.influx_manager import InfluxDBManager, InfluxDBConfig, InfluxDBCallbacks
 from config import *
 import random
 
@@ -165,7 +159,7 @@ class SimpleStockEnv(gym.Env):
 
         # --- 5. 总 Reward 汇总 ---
         # 权重分配：
-        # Base: 1.0 (主导)
+        # Base: 2.0 (主导)
         # Risk: -0.1, -0.1
         # Empty: -0.01
         # Position Uncertainty: -0.01
@@ -177,8 +171,8 @@ class SimpleStockEnv(gym.Env):
                      -0.01 * r_position_uncertainty + \
                        0.3 * r_new_high
         
-        # 稍微给一点生存奖励，防止因为全是负分而自杀
-        total_reward += 0.001 
+        # # 稍微给一点生存奖励，防止因为全是负分而自杀
+        # total_reward += 0.001 
 
         # 裁剪，防止梯度爆炸
         total_reward = np.clip(total_reward, -10.0, 10.0)
@@ -187,7 +181,6 @@ class SimpleStockEnv(gym.Env):
         info = {
             "net_worth": float(current_net_worth),
             "shares": self.number_of_shares,
-            "today": self.today,
             "r_base": r_base,
             "r_risk_hold": r_risk_hold,
             "r_risk_down": r_risk_down,
