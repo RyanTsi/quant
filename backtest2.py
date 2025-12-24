@@ -12,52 +12,91 @@ from config import *
 # --- 1. 定制一个用于回测的确定性环境 ---
 class SingleStockTestEnv(SimpleStockEnv):
     """
-    继承自 SimpleStockEnv，但去掉了随机性。
-    强制只使用传入的那一张 DataFrame，并且从第 WINDOW_SIZE 天一直跑到最后一天。
+    确定性回测环境：继承自 SimpleStockEnv
     """
+    def _get_observation(self):
+        # 1. 获取基础历史数据（不加噪声，不加掩码）
+        history = np.array(self.stock_history.copy(), dtype=np.float32)
+        
+        # 2. 派生特征计算（逻辑与父类完全一致，但确保没有随机扰动）
+        current_idx = self.today
+        lookback = 65 
+        start_idx = max(0, current_idx - lookback)
+        window_prices = self.prices[start_idx : current_idx + 1]
+        
+        def get_bias(p_array, period):
+            if len(p_array) < period:
+                return 0.0
+            ma = np.mean(p_array[-period:])
+            return (p_array[-1] - ma) / ma * INCR_PARA
+            
+        def get_ma(p_array, period):
+            return np.mean(p_array[-period:])
+        
+        bias5  = get_bias(window_prices, 5)
+        bias20 = get_bias(window_prices, 20)
+        bias60 = get_bias(window_prices, 60)
+        
+        self.ma5 = get_ma(window_prices, 5)
+        self.ma20 = get_ma(window_prices, 20)
+        ma_dist5_20 = (self.ma5 - self.ma20) / self.ma20 * INCR_PARA
+
+        # 3. 账户状态
+        current_price = self.prices[self.today]
+        current_net_worth = self.my_cash + self.number_of_shares * current_price
+        cash_ratio = self.my_cash / current_net_worth if current_net_worth > 0 else 0.0
+        position_ratio = 1.0 - cash_ratio
+        
+        # 4. 拼接最终向量
+        obs = np.concatenate([
+            history, 
+            [bias5, bias20, bias60, ma_dist5_20],
+            [cash_ratio, position_ratio]
+        ]).astype(np.float32)
+        
+        return obs
+
     def reset(self, seed=None, options=None):
-        # 不调用 super().reset() 因为我们要重写初始化逻辑
-        # 但为了兼容性，保留 seed 处理
+        # 1. 基础初始化
         if seed is not None:
             np.random.seed(seed)
         
-        # 强制选择第一只（也是唯一一只）股票
+        # 强制选择第一只股票数据
         self.current_df = self.df_list[0]
         self.prices = self.current_df['收盘'].values.astype(np.float32)
-        # 获取日期用于画图
         self.dates = pd.to_datetime(self.current_df['time'].values)
         
         total_len = len(self.prices)
         
-        # --- 关键修改：不再随机选择开始时间 ---
-        # 强制从数据能支持的最早时间开始
+        # 2. 确定性起跑点：从 WINDOW_SIZE 开始
         start_index = 0
         self.today = start_index + WINDOW_SIZE
-        # 强制跑到数据结束
         self.last_day = total_len - 1 
 
-        # 初始化账户
+        # 3. 初始化账户 (严格同步父类变量名)
         self.my_cash = ORIGINAL_MONEY
         self.number_of_shares = 0
+        self.highest_worth = ORIGINAL_MONEY
+        self.highest_worth_day = self.today
+        
+        # 4. 初始化 Reward 计算相关变量
+        self.alpha = 1.0  # 回测时 alpha 通常设为起始值，或根据你的策略调整
         self.target_value = NEW_HIGH_TARGET
         self.new_high_reward = NEW_HIGH_REWARD
-        self.times = 0
-        self.ave_r_base = 0
-        self.ave_r_risk_hold = 0
-        self.ave_r_risk_down = 0
-        self.ave_r_action_penalty = 0
-        self.ave_r_position_uncertainty = 0
-        self.ave_r_new_high = 0
+        self.times = 1 # 对应父类的 self.times 迭代
         
+        # 5. 初始化 info 统计变量
+        self.ma5 = 0
+        self.ma20 = 0
+        self.ave_r_base = 0
+        self.ave_r_risk = 0
+        self.ave_r_new_high = 0
         self.max_r_base = 0
-        self.max_r_risk_hold = 0
-        self.max_r_risk_down = 0
-        self.max_r_action_penalty = 0
-        self.max_r_position_uncertainty = 0
+        self.max_r_risk = 0
         self.max_r_new_high = 0
-        self.pos_ratio = 0
-
-        # 初始化历史
+        self.max_drawdown = 0
+        
+        # 6. 初始化历史数据 (同步父类逻辑)
         self.stock_history = []
         current_window_prices = self.prices[self.today - WINDOW_SIZE : self.today + 1]
         for i in range(WINDOW_SIZE):
@@ -71,14 +110,14 @@ class SingleStockTestEnv(SimpleStockEnv):
 # --- 2. 绘图函数 ---
 def plot_backtest_results(stock_code, records):
     """
-    records 包含: dates, prices, net_worths, actions, pos_ratios, rewards_breakdown
+    records 包含: dates, prices, net_worths, actions, pos_ratio, rewards_breakdown
     """
     # 提取数据
     dates = records['dates']
     prices = records['prices']
     net_worths = records['net_worths']
     actions = records['actions']
-    pos_ratios = records['pos_ratios']
+    pos_ratio = records['pos_ratio']
     
     # 准备 Buy/Sell 信号用于画图
     buy_x, buy_y = [], []
@@ -125,8 +164,8 @@ def plot_backtest_results(stock_code, records):
 
     # Subplot 3: 仓位变化
     ax3 = axes[2]
-    ax3.fill_between(dates, pos_ratios, color='orange', alpha=0.3, label='仓位占比')
-    ax3.plot(dates, pos_ratios, color='orange', linewidth=1)
+    ax3.fill_between(dates, pos_ratio, color='orange', alpha=0.3, label='仓位占比')
+    ax3.plot(dates, pos_ratio, color='orange', linewidth=1)
     ax3.set_ylim(-0.1, 1.1)
     ax3.set_ylabel('仓位 (0-1)')
     ax3.set_title("持仓比例变化")
@@ -145,7 +184,37 @@ def plot_backtest_results(stock_code, records):
 # --- 3. 主程序 ---
 if __name__ == "__main__":
     # 配置
-    target_stocks = ["600519", "300750", "300496", "000001", "600519", "000651", "002475", "601318", "000333", "002594", "601166", "000725"]
+    target_stocks = [
+    # --- 能源与红利板块 (低波动、高股息、独立行情) ---
+    "600938",  # 中国海油 - 国际油价驱动，高股息
+    "600900",  # 长江电力 - 防御性极强的类债资产
+    "601088",  # 中国神华 - 煤炭龙头，红利风格代表
+    "601899",  # 紫金矿业 - 黄金+铜，受国际大宗商品定价
+
+    # --- 核心科技与AI (高弹性、受美股科技股映射) ---
+    "300308",  # 中际旭创 - AI光模块龙头，波动率极大
+    "601138",  # 工业富联 - AI服务器+苹果概念，流动性极佳
+    "002371",  # 北方华创 - 半导体设备，国产化替代核心
+    "603986",  # 兆易创新 - 存储芯片，半导体周期拐点代表
+
+    # --- 权重白马与内需消费 (指数定海神针) ---
+    "600519",  # 贵州茅台 - 消费总龙头，市场信心指标
+    "000333",  # 美的集团 - 家电白马，业绩极其稳健
+    "603605",  # 珀莱雅   - 消费细分领域(美妆)的长牛代表
+    "000651",  # 格力电器 - 传统白马，高分红+低估值
+
+    # --- 新能源与高端制造 (全球定价、出海逻辑) ---
+    "300750",  # 宁德时代 - 锂电绝对龙头，创业板权重
+    "002594",  # 比亚迪   - 新能源车龙头，制造能力代表
+    "600031",  # 三一重工 - 机械出海，老牌周期白马复苏
+    "002475",  # 立讯精密 - 电子制造服务，精密制造代表
+
+    # --- 金融与市场情绪 (牛市旗手、宏观beta) ---
+    "600030",  # 中信证券 - 券商龙头，反应市场活跃度
+    "601318",  # 中国平安 - 保险/金融，宏观经济晴雨表
+    "601166",  # 兴业银行 - 低估值银行，高流动性金融权重
+    "000725"   # 京东方A  - 面板周期龙头，极其庞大的成交量
+]
     test_start = datetime(2024, 1, 1)
     test_end = datetime(2025, 12, 12)
     
@@ -177,7 +246,7 @@ if __name__ == "__main__":
         # 5. 运行回测循环
         records = {
             'dates': [], 'prices': [], 'net_worths': [], 
-            'actions': [], 'pos_ratios': []
+            'actions': [], 'pos_ratio': []
         }
         
         done = False
@@ -196,8 +265,8 @@ if __name__ == "__main__":
             records['dates'].append(current_date)
             records['prices'].append(current_price)
             records['net_worths'].append(info['net_worth'])
-            records['actions'].append(float(action[0])) # 记录动作数值
-            records['pos_ratios'].append(info['pos_ratios']) # 这里的 key 要和你 step 返回的 info 一致
+            records['actions'].append(float(action[0]))
+            records['pos_ratio'].append(info['pos_ratio'])
 
         # 6. 画图
         print(f"✅ 回测完成，正在绘图...")

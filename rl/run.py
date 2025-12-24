@@ -1,231 +1,282 @@
 import random
-import rl.prehandle
 import numpy as np
+import os
+import pickle
+import matplotlib.pyplot as plt  # 引入绘图库
 from datetime import datetime
+from stable_baselines3 import SAC
+from stable_baselines3.common.callbacks import CheckpointCallback, CallbackList, EvalCallback, BaseCallback
+from stable_baselines3.common.utils import set_random_seed
+from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
+import torch
+
+# --- 自定义模块导入 ---
+import rl.prehandle
 from rl.environment import SimpleStockEnv
 from database.influx_manager import InfluxDBManager, InfluxDBConfig, InfluxDBCallbacks
-from config import *
-from stable_baselines3 import SAC
-import os
-from stable_baselines3.common.callbacks import CheckpointCallback, CallbackList, EvalCallback
-from stable_baselines3.common.callbacks import BaseCallback
-from stable_baselines3.common.utils import set_random_seed
-from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor
-import pickle
-import glob
+from config import * 
 
-class TensorboardCallback(BaseCallback):
-    def __init__(self, verbose=0):
-        super(TensorboardCallback, self).__init__(verbose)
+# ==========================================
+# 1. 核心组件：自适应 Alpha 回调函数
+# ==========================================
+class AdaptiveAlphaCallback(BaseCallback):
+    """
+    根据模型表现自动调整 Alpha (风险惩罚权重)
+    逻辑：当平均奖励超过阈值，且过了冷却期，就增加 Alpha
+    """
+    def __init__(self, verbose=0, start_alpha=0.1, max_alpha=1.8, cooldown_steps=30000, warmup_steps=61000):
+        super(AdaptiveAlphaCallback, self).__init__(verbose)
+        self.current_alpha = start_alpha
+        self.max_alpha = max_alpha
+        self.reward_threshold = 0.5  # 初始门槛：平均收益达到 0.5 才加压
+        self.warmup_steps = warmup_steps
+        self.last_update_step = 0
+        self.cooldown = cooldown_steps
+        self.step_size = 0.2         # 每次增加 0.2
 
     def _on_step(self) -> bool:
-        # 获取当前 step 的 info 字典
-        # self.locals['infos'] 是一个列表，因为可能有多个并行环境
-        info = self.locals['infos'][0]
-        for x in info:
-            path = "custom/" + x
-            self.logger.record(path, info[x])
-        # if "net_worth" in info:
-        #     # 将资产净值记录到 TensorBoard 的 "Custom/NetWorth" 路径下
-        #     self.logger.record("custom/net_worth", info["net_worth"])
-        # if "shares" in info:
-        #     self.logger.record("custom/shares_held", info["shares"])
-        # if "r_base" in info:
-        #     self.logger.record("custom/reward_base", info["r_base"])
-        # if "r_risk_hold" in info:
-        #     self.logger.record("custom/reward_risk_hold", info["r_risk_hold"])
-        # if "r_risk_down" in info:
-        #     self.logger.record("custom/reward_risk_down", info["r_risk_down"])
-        # if "r_act_pen" in info:
-        #     self.logger.record("custom/reward_action_penalty", info["r_act_pen"])
-        # if "r_pos_unc" in info:
-        #     self.logger.record("custom/reward_position_uncertainty", info["r_pos_unc"])
-        # if "drawdown" in info:
-        #     self.logger.record("custom/drawdown", info["drawdown"])
-        # if "sigma" in info:
-        #     self.logger.record("custom/sigma", info["sigma"])
+        global_step = self.num_timesteps
+        
+        # 获取最近 100 局的平均奖励 (SB3 自动维护该指标)
+        # 这里的 key 必须是 SB3 原生记录的 rollout/ep_rew_mean
+        ep_rew_mean = self.logger.name_to_value.get("rollout/ep_rew_mean", -np.inf)
+
+        # --- 自适应判断逻辑 ---
+        # 1. 超过预热
+        # 2. 奖励超过当前门槛
+        # 3. 距离上次调整已经过了冷却期 (防止频繁震荡)
+        # 4. Alpha 还没到上限
+        if (global_step > self.warmup_steps and
+            ep_rew_mean > self.reward_threshold and 
+            (global_step - self.last_update_step) > self.cooldown and 
+            self.current_alpha < self.max_alpha):
+            
+            # 执行升级
+            self.current_alpha += self.step_size
+            self.reward_threshold += 0.5  # 提高下一次的门槛，逼迫模型进化
+            self.last_update_step = global_step
+            
+            # 注入环境 (DummyVecEnv 下 set_attr 是即时生效的)
+            self.training_env.set_attr("alpha", self.current_alpha)
+            
+            print(f"\n🔥 [进化时刻] Step {global_step}: Alpha 提升至 {self.current_alpha:.1f}, 下一目标 Reward > {self.reward_threshold:.1f}")
+
+        # --- Tensorboard 记录 ---
+        # 记录环境参数变化
+        self.logger.record("env/adaptive_alpha", self.current_alpha)
+        self.logger.record("env/target_threshold", self.reward_threshold)
+        
+        # 记录关键性能指标 (从 Info 中提取)
+        if len(self.locals['infos']) > 0:
+            info = self.locals['infos'][0]
+            if "net_worth" in info:
+                self.logger.record("performance/net_worth", info["net_worth"])
+            if "max_drawdown" in info:
+                self.logger.record("performance/max_drawdown", info["max_drawdown"])
+            if "pos_ratio" in info:
+                self.logger.record("performance/position_ratio", info["pos_ratio"])
+            
+            # 记录奖励细节
+            reward_keys = ["ave_r_base", "ave_r_risk", "max_r_base", "max_r_risk"]
+            for key in reward_keys:
+                if key in info:
+                    self.logger.record(f"rewards/{key}", info[key])
+
         return True
-    
-def get_data_with_cache(manager, codes, start_date, end_date, cache_name="stock_data_cache.pkl"):
-    # 检查本地是否存在缓存文件
+
+# ==========================================
+# 2. 数据加载工具 (带缓存)
+# ==========================================
+def get_data_with_cache(manager, codes, start_date, end_date, cache_name):
+    """优先从本地 pickle 读取，否则从 InfluxDB 下载并缓存"""
     if os.path.exists(cache_name):
-        print(f"📦 发现本地缓存 {cache_name}，正在快速加载...")
+        print(f"📦 发现缓存 {cache_name}，快速加载中...")
         with open(cache_name, "rb") as f:
             return pickle.load(f)
     
-    # 如果没有缓存，则执行原有的下载逻辑
-    print("🚀 本地无缓存，开始从 InfluxDB 提取数据...")
+    print(f"🚀 本地无缓存，开始下载 {len(codes)} 只股票数据...")
     df_list = []
     for code in codes:
         try:
-            df_temp = manager.get_stock_data_by_range(
-                stock_code=code,
-                start_time=start_date, 
-                end_time=end_date
-            )
+            df_temp = manager.get_stock_data_by_range(stock_code=code, start_time=start_date, end_time=end_date)
             df_clean = rl.prehandle.preprocess_data(df_temp)
-            if df_clean is not None and len(df_clean) > WINDOW_SIZE + TRAINING_DAYS:
+            # 简单过滤：数据长度不够的不要
+            if df_clean is not None and len(df_clean) > WINDOW_SIZE + 200:
                 df_list.append(df_clean)
-                print(f"✅ {code} 加载成功")
         except Exception as e:
-            print(f"❌ {code} 加载失败: {e}")
+            print(f"❌ {code} 失败: {e}")
     
-    # 下载完成后，保存到本地
     if df_list:
-        print(f"💾 正在将 {len(df_list)} 只股票保存至本地缓存...")
+        print(f"💾 保存缓存至 {cache_name}...")
         with open(cache_name, "wb") as f:
             pickle.dump(df_list, f)
             
     return df_list
 
+# ==========================================
+# 3. 主程序
+# ==========================================
 SEED = 5418
-
-def make_env(df_list, rank, seed=0):
-    def _init():
-        env = SimpleStockEnv(df_list)
-        env.reset(seed=seed + rank)
-        return env
-    set_random_seed(seed)
-    return _init
+ADDITIONAL_STEPS = 2_000_000
 
 if __name__ == "__main__":
-    # ------------ 数据准备 ------------
-    # 1. 初始化 InfluxDB
+    set_random_seed(SEED)
+    
+    # --- A. 数据准备 ---
     config = InfluxDBConfig(HOST, DATABASE, TOKEN)
     manager = InfluxDBManager(config, InfluxDBCallbacks())
     
-    # 2. 获取股票列表并随机筛选
-    valid_prefixes = ('600', '601', '603', '605', '000', '001', '002', '003')
-    all_stock_codes = manager.get_stock_code_list_by_date(target_date=datetime(2025, 12, 12))
-    main_board_codes = [code for code in all_stock_codes if code.startswith(valid_prefixes)]
-    print(f"📊 原始股票总数: {len(all_stock_codes)}")
-    print(f"🏛️ 筛选后主板/中小板数量: {len(main_board_codes)}")
-    if len(main_board_codes) >= 1200:
-        selected_codes = np.random.choice(main_board_codes, size=1200, replace=False)
-    else:
-        print(f"⚠️ 警告：符合条件的股票仅有 {len(main_board_codes)} 只，不足 1200，将全部选取。")
-        selected_codes = main_board_codes
-        
-    # 3. 通过缓存获取数据
-    print("正在加载训练集...")
+    # 获取股票列表
+    target_date = datetime(2025, 12, 12)
+    all_codes = manager.get_stock_code_list_by_date(target_date)
+    # 过滤主板
+    valid_prefixes = ('600', '601', '603', '000', '002')
+    main_codes = [c for c in all_codes if c.startswith(valid_prefixes)]
+    
+    # 随机抽 1200 只
+    selected_codes = np.random.choice(main_codes, size=min(1200, len(main_codes)), replace=False)
+    print(f"📊 选中股票数量: {len(selected_codes)}")
+
     train_dfs = get_data_with_cache(manager, selected_codes, train_range[0], train_range[1], "train_data.pkl")
-    
-    print("正在加载验证集...")
-    val_dfs = get_data_with_cache(manager, selected_codes, val_range[0], val_range[1], "val_data.pkl")
-    
-    print("正在加载测试集...")
-    test_dfs = get_data_with_cache(manager, selected_codes, test_range[0], test_range[1], "test_data.pkl")
-
+    val_dfs   = get_data_with_cache(manager, selected_codes, val_range[0], val_range[1], "val_data.pkl")
+    test_dfs  = get_data_with_cache(manager, selected_codes, test_range[0], test_range[1], "test_data.pkl")
     manager.close()
-    # ------------ 环境构建 ------------ 
 
-    num_cpu = 20
-    subset_size = 400  # 每个进程负责 400 只股票
-    train_env_list = []
-    val_env_list = []
-    for i in range(num_cpu):
-        t_idx_subset = random.sample(train_dfs, subset_size) 
-        train_env_list.append(make_env(t_idx_subset, i, SEED))
-    for i in range(num_cpu // 2):
-        v_idx_subset = random.sample(val_dfs, int(subset_size * 1.5)) 
-        val_env_list.append(make_env(v_idx_subset, i, SEED))
-
-    train_env = SubprocVecEnv(train_env_list)
+    # --- B. 环境构建 (单进程 DummyVecEnv) ---
+    train_env = DummyVecEnv([lambda: SimpleStockEnv(train_dfs)])
     train_env = VecMonitor(train_env, TRAIN_LOG_DIR)
 
-    val_env = SubprocVecEnv([make_env(val_dfs, i, SEED + 7324) for i in range(num_cpu // 2)])
+    val_env = DummyVecEnv([lambda: SimpleStockEnv(val_dfs)])
     val_env = VecMonitor(val_env, VAL_LOG_DIR)
-    # ------------ 回调函数 ------------ 
 
-    # A. 验证回调 (EvalCallback) - 核心部分
-    # 它的作用：每隔 eval_freq 步，暂停训练，用当前模型在 val_env 里跑 n_eval_episodes 局
-    # 如果平均奖励创新高，就保存到 best_model_save_path
+    # --- C. 回调函数组装 ---
+    
+    # 1. 验证回调：定期在验证集上测试
     eval_callback = EvalCallback(
         val_env,
         best_model_save_path='./best_model/',
         log_path=VAL_LOG_DIR,
-        eval_freq=756,          # 每训练 1万步(env steps) 验证一次
-        n_eval_episodes=50,     # 每次验证跑 50 局取平均，消除随机性
-        deterministic=True,     # 验证时由确定性策略(去除随机探索)，看真实实力
+        eval_freq=10_000,
+        n_eval_episodes=100,     # 验证 100 局
+        deterministic=True,
         render=False
     )
-
-    # B. 定期保存 (Checkpoint)
-    checkpoint_callback = CheckpointCallback(save_freq=4536, save_path='./checkpoints/', name_prefix='sac_stock')
     
-    # C. Tensorboard 记录细节
-    tb_callback = TensorboardCallback()
-
-    # 组合回调
-    callback_list = CallbackList([eval_callback, checkpoint_callback, tb_callback])
-
-    # ------------ 模型训练 ------------
-
-    model = SAC(
-        "MlpPolicy", 
-        train_env, 
-        tensorboard_log=TRAIN_LOG_DIR,
-        # learning_rate=2e-4, 
-        # buffer_size=1_000_000, 
-        # learning_starts=5000,
-        # batch_size=1024,
-        # train_freq=(22, "step"),
-        # gradient_steps=22,
-        # ent_coef='auto',
-        # target_entropy='auto',
-        verbose=1,
-        # use_sde=True,
-        device="cuda"
+    # 2. 检查点回调：定期保存模型文件
+    checkpoint_callback = CheckpointCallback(
+        save_freq=20000, 
+        save_path='./checkpoints/', 
+        name_prefix='sac_adaptive'
     )
-    print("开始训练...")
-    model.learn(
-        total_timesteps=5_000_000, 
-        callback=callback_list,
-        reset_num_timesteps=False 
-    )
-    print("训练结束。")
-
-    # --- 最终测试 (Backtest) ---
-    print("开始在测试集上回测最佳模型...")
     
-    # 加载验证集上表现最好的模型
-    best_model_path = os.path.join('./best_model/', "best_model.zip")
+    # 3. 自适应 Alpha 回调：核心逻辑
+    # 假设我们从 0.0 开始，最高到 1.8
+    adaptive_cb = AdaptiveAlphaCallback(start_alpha=0.1, max_alpha=1.8)
+
+    callback_list = CallbackList([eval_callback, checkpoint_callback, adaptive_cb])
+
+    # --- D. 模型加载与训练 (断点续传核心) ---
+    best_model_path = "./best_model/best_model.zip"
+    policy_kwargs = dict(
+        net_arch=dict(pi=[256, 256], qf=[256, 256]), # 网络大小适中
+        activation_fn=torch.nn.ReLU
+    )
     if os.path.exists(best_model_path):
-        model = SAC.load(best_model_path, device="cuda")
-        print("已加载最佳模型。")
-    else:
-        print("未找到最佳模型，使用当前最终模型。")
-
-    # 构建测试环境 (这里可以用 DummyVecEnv 方便调试，或者 SubprocVecEnv 加速)
-    # 测试集是 2024-2025 的数据
-    test_env = SubprocVecEnv([make_env(test_dfs, i, SEED + 906) for i in range(num_cpu)])
-    
-    # 跑测试
-    obs = test_env.reset()
-    total_episodes = 100 # 测试 100 个不同的股票/时间段
-    episode_counts = 0
-    test_rewards = []
-    
-    # 用于记录资产曲线
-    # 注意：并行环境很难画出单一的连续曲线，通常我们统计分布
-    
-    while episode_counts < total_episodes:
-        action, _states = model.predict(obs, deterministic=True)
-        obs, rewards, dones, infos = test_env.step(action)
+        print(f"🔄 发现现有模型 {best_model_path}，正在加载...")
+        model = SAC.load(best_model_path, env=train_env, device="cuda")
+        # 计算新的目标步数
+        current_steps = model.num_timesteps
+        target_steps = current_steps + ADDITIONAL_STEPS
+        print(f"📈 历史步数: {current_steps}")
+        print(f"🎯 目标步数: {target_steps} (+{ADDITIONAL_STEPS})")
         
-        for i, done in enumerate(dones):
-            if done:
-                episode_counts += 1
-                # 获取该局结束时的信息
-                if "net_worth" in infos[i]:
-                     final_value = infos[i]["net_worth"]
-                     roi = (final_value - ORIGINAL_MONEY) / ORIGINAL_MONEY
-                     test_rewards.append(roi)
-                     print(f"测试局 {episode_counts}: 收益率 {roi*100:.2f}%")
+        # 尝试加载 Replay Buffer (如果存在)，这会让训练更平滑
+        buffer_path = "./best_model/replay_buffer.pkl"
+        if os.path.exists(buffer_path):
+            print("💾 加载 Replay Buffer...")
+            model.load_replay_buffer(buffer_path)
+            
+    else:
+        print("🆕 创建全新 SAC 模型...")
+        model = SAC(
+            "MlpPolicy", 
+            train_env, 
+            verbose=1, 
+            tensorboard_log=TRAIN_LOG_DIR,
+            device="cuda",
+            policy_kwargs=policy_kwargs,
+            buffer_size=1_000_000,
+            learning_starts=60_000, # 预收集：先跑 2万步 (约300局) 
+            batch_size=4096,        # 大 Batch：一次看 4096 条数据
+            tau=0.005,
+            gamma=0.99,
+            learning_rate=1e-4,
+            train_freq=7,
+            gradient_steps=1,
+            ent_coef='auto',
+        )
+        target_steps = ADDITIONAL_STEPS
 
-    print(f"平均测试收益率: {np.mean(test_rewards)*100:.2f}%")
-    print(f"正收益比例: {np.sum(np.array(test_rewards) > 0) / len(test_rewards) * 100:.2f}%")
+    print("🚀 开始训练...")
+    try:
+        model.learn(
+            total_timesteps=target_steps, 
+            callback=callback_list,
+            reset_num_timesteps=False
+        )
+    except KeyboardInterrupt:
+        print("⚠️ 检测到中断，正在保存当前模型...")
+        model.save("./best_model/interrupted_model")
+        # 手动保存 buffer
+        model.save_replay_buffer("./best_model/replay_buffer.pkl")
+
+    print("✅ 训练结束。保存最终模型...")
+    model.save("./best_model/final_model")
+    model.save_replay_buffer("./best_model/replay_buffer.pkl")
+
+    # --- E. 最终回测与可视化 ---
+    print("\n🔍 开始回测可视化...")
     
-    test_env.close()
-    train_env.close()
-    val_env.close()
+    # 加载最佳模型进行测试
+    test_model = SAC.load("./best_model/best_model.zip", device="cuda")
+    test_env = DummyVecEnv([lambda: SimpleStockEnv(test_dfs)]) # 使用测试集
+    
+    returns = []
+    obs = test_env.reset()
+    
+    # 测试 100 个Episode
+    for i in range(100):
+        done = False
+        while not done:
+            action, _ = test_model.predict(obs, deterministic=True)
+            obs, reward, done, info = test_env.step(action)
+            
+            if done:
+                # 提取收益率
+                net_worth = info[0]["net_worth"]
+                roi = (net_worth - ORIGINAL_MONEY) / ORIGINAL_MONEY
+                returns.append(roi)
+                print(f"测试局 {i+1}: 收益率 {roi*100:.2f}%")
+
+    # 绘制直方图
+    plt.figure(figsize=(10, 6))
+    plt.hist(returns, bins=20, color='skyblue', edgecolor='black', alpha=0.7)
+    plt.axvline(x=0, color='r', linestyle='--', label='盈亏平衡线')
+    plt.title('模型在测试集上的收益分布 (100局)')
+    plt.xlabel('收益率 (ROI)')
+    plt.ylabel('频次')
+    plt.legend()
+    plt.grid(axis='y', alpha=0.5)
+    
+    # 保存图片
+    plot_path = os.path.join(TRAIN_LOG_DIR, "backtest_distribution.png")
+    plt.savefig(plot_path)
+    print(f"📊 收益分布图已保存至: {plot_path}")
+    
+    # 打印统计数据
+    returns = np.array(returns)
+    print(f"\n🏆 最终成绩单:")
+    print(f"平均收益: {np.mean(returns)*100:.2f}%")
+    print(f"正收益比例: {np.sum(returns > 0)} / {len(returns)} ({np.sum(returns > 0)/len(returns)*100:.0f}%)")
+    print(f"最大单局盈利: {np.max(returns)*100:.2f}%")
+    print(f"最大单局亏损: {np.min(returns)*100:.2f}%")
