@@ -75,6 +75,7 @@ class AdaptiveAlphaCallback(BaseCallback):
                 self.logger.record("performance/max_drawdown", info["max_drawdown"])
             if "pos_ratio" in info:
                 self.logger.record("performance/position_ratio", info["pos_ratio"])
+                self.logger.record("performance/alpha", info["alpha"])
             
             # 记录奖励细节
             reward_keys = ["ave_r_base", "ave_r_risk", "max_r_base", "max_r_risk"]

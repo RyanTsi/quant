@@ -12,25 +12,25 @@ from config import *
 # --- 1. 定制一个用于回测的确定性环境 ---
 class SingleStockTestEnv(SimpleStockEnv):
     """
-    确定性回测环境：继承自 SimpleStockEnv
+    确定性回测环境：严格对齐 SimpleStockEnv 的最新逻辑
     """
     def _get_observation(self):
-        # 1. 获取基础历史数据（不加噪声，不加掩码）
+        # 1. 基础历史数据（回测关闭噪声和掩码，保持确定性）
         history = np.array(self.stock_history.copy(), dtype=np.float32)
         
-        # 2. 派生特征计算（逻辑与父类完全一致，但确保没有随机扰动）
+        # 2. 派生特征计算（逻辑与父类完全一致）
         current_idx = self.today
-        lookback = 65 
-        start_idx = max(0, current_idx - lookback)
+        start_idx = max(0, current_idx - 65)
         window_prices = self.prices[start_idx : current_idx + 1]
         
         def get_bias(p_array, period):
-            if len(p_array) < period:
-                return 0.0
+            if len(p_array) < period: return 0.0
             ma = np.mean(p_array[-period:])
+            if ma == 0: return 0.0
             return (p_array[-1] - ma) / ma * INCR_PARA
             
         def get_ma(p_array, period):
+            if len(p_array) < period: return p_array[-1]
             return np.mean(p_array[-period:])
         
         bias5  = get_bias(window_prices, 5)
@@ -39,15 +39,21 @@ class SingleStockTestEnv(SimpleStockEnv):
         
         self.ma5 = get_ma(window_prices, 5)
         self.ma20 = get_ma(window_prices, 20)
-        ma_dist5_20 = (self.ma5 - self.ma20) / self.ma20 * INCR_PARA
+        
+        # 同步父类的均线距离公式 (ma5 - ma20) / (ma20 + 1e-8)
+        ma_dist5_20 = (self.ma5 - self.ma20) / (self.ma20 + 1e-8) * INCR_PARA
 
-        # 3. 账户状态
+        # 3. 仓位状态 (同步父类逻辑)
         current_price = self.prices[self.today]
         current_net_worth = self.my_cash + self.number_of_shares * current_price
-        cash_ratio = self.my_cash / current_net_worth if current_net_worth > 0 else 0.0
-        position_ratio = 1.0 - cash_ratio
         
-        # 4. 拼接最终向量
+        if current_net_worth <= 0:
+            cash_ratio = 0.0
+            position_ratio = 0.0
+        else:
+            cash_ratio = self.my_cash / current_net_worth
+            position_ratio = 1.0 - cash_ratio
+        
         obs = np.concatenate([
             history, 
             [bias5, bias20, bias60, ma_dist5_20],
@@ -57,19 +63,14 @@ class SingleStockTestEnv(SimpleStockEnv):
         return obs
 
     def reset(self, seed=None, options=None):
-        # 1. 基础初始化
-        if seed is not None:
-            np.random.seed(seed)
-        
-        # 强制选择第一只股票数据
+        # 强制选择传入的第一只股票
         self.current_df = self.df_list[0]
         self.prices = self.current_df['收盘'].values.astype(np.float32)
+        # 记录真实日期用于绘图
         self.dates = pd.to_datetime(self.current_df['time'].values)
         
         total_len = len(self.prices)
-        
-        # 2. 确定性起跑点：从 WINDOW_SIZE 开始
-        start_index = 0
+        start_index = 0 # 回测从头开始
         self.today = start_index + WINDOW_SIZE
         self.last_day = total_len - 1 
 
@@ -78,25 +79,16 @@ class SingleStockTestEnv(SimpleStockEnv):
         self.number_of_shares = 0
         self.highest_worth = ORIGINAL_MONEY
         self.highest_worth_day = self.today
-        
-        # 4. 初始化 Reward 计算相关变量
-        self.alpha = 1.0  # 回测时 alpha 通常设为起始值，或根据你的策略调整
-        self.target_value = NEW_HIGH_TARGET
-        self.new_high_reward = NEW_HIGH_REWARD
-        self.times = 1 # 对应父类的 self.times 迭代
-        
-        # 5. 初始化 info 统计变量
-        self.ma5 = 0
-        self.ma20 = 0
-        self.ave_r_base = 0
-        self.ave_r_risk = 0
-        self.ave_r_new_high = 0
-        self.max_r_base = 0
-        self.max_r_risk = 0
-        self.max_r_new_high = 0
         self.max_drawdown = 0
         
-        # 6. 初始化历史数据 (同步父类逻辑)
+        # 4. 回测时的 Alpha 设置
+        # 建议设为 1.0 或 训练结束时的最终 Alpha，用于观察风险惩罚下的收益
+        self.alpha = 1.0 
+        
+        # 5. 初始化容器
+        self.episode_rewards = {"r_base": [], "r_risk": [], "r_new_high": []}
+        
+        # 6. 初始化历史序列
         self.stock_history = []
         current_window_prices = self.prices[self.today - WINDOW_SIZE : self.today + 1]
         for i in range(WINDOW_SIZE):
@@ -110,73 +102,69 @@ class SingleStockTestEnv(SimpleStockEnv):
 # --- 2. 绘图函数 ---
 def plot_backtest_results(stock_code, records):
     """
-    records 包含: dates, prices, net_worths, actions, pos_ratio, rewards_breakdown
+    records 包含: dates, prices, net_worths, actions, pos_ratio, r_risks, ma20
     """
-    # 提取数据
     dates = records['dates']
-    prices = records['prices']
+    prices = np.array(records['prices'])
     net_worths = records['net_worths']
     actions = records['actions']
     pos_ratio = records['pos_ratio']
-    
-    # 准备 Buy/Sell 信号用于画图
+    r_risks = np.array(records['r_risks']) # 新增：风险惩罚分
+    ma20 = np.array(records['ma20'])       # 新增：20日均线
+
+    # 准备买卖信号
     buy_x, buy_y = [], []
     sell_x, sell_y = [], []
-    
     for i, act in enumerate(actions):
-        if act > 0.15: # 只有明显买入才标记
-            buy_x.append(dates[i])
-            buy_y.append(prices[i])
-        elif act < -0.15: # 只有明显卖出才标记
-            sell_x.append(dates[i])
-            sell_y.append(prices[i])
+        if act > 0.15: 
+            buy_x.append(dates[i]); buy_y.append(prices[i])
+        elif act < -0.15: 
+            sell_x.append(dates[i]); sell_y.append(prices[i])
 
-    # 设置风格
     sns.set_theme(style="darkgrid")
-    plt.rcParams['font.sans-serif'] = ['SimHei'] # 用来正常显示中文标签
+    plt.rcParams['font.sans-serif'] = ['SimHei']
     plt.rcParams['axes.unicode_minus'] = False
     
-    # 创建 4 个子图
-    fig, axes = plt.subplots(4, 1, figsize=(16, 12), sharex=True, gridspec_kw={'height_ratios': [3, 2, 1, 1]})
-    fig.suptitle(f"个股回测分析: {stock_code}", fontsize=20, fontweight='bold')
+    # 增加高度，容纳 5 个子图
+    fig, axes = plt.subplots(5, 1, figsize=(16, 16), sharex=True, 
+                             gridspec_kw={'height_ratios': [3, 2, 1, 1, 1.5]})
+    fig.suptitle(f"个股回测与风险痛感分析: {stock_code}", fontsize=20, fontweight='bold')
 
     # Subplot 1: 股价 + 买卖点
-    ax1 = axes[0]
-    ax1.plot(dates, prices, label='股价 (Close)', color='black', alpha=0.6, linewidth=1.5)
-    # 画买卖信号
-    ax1.scatter(buy_x, buy_y, color='red', marker='^', s=100, label='买入', zorder=5)
-    ax1.scatter(sell_x, sell_y, color='green', marker='v', s=100, label='卖出', zorder=5)
-    ax1.set_ylabel('股价')
-    ax1.legend(loc='upper left')
-    ax1.set_title("股价走势与交易信号")
+    axes[0].plot(dates, prices, label='股价 (Close)', color='black', alpha=0.6)
+    axes[0].plot(dates, ma20, label='MA20', color='blue', linestyle='--', alpha=0.4) # 画出均线
+    axes[0].scatter(buy_x, buy_y, color='red', marker='^', s=100, label='买入', zorder=5)
+    axes[0].scatter(sell_x, sell_y, color='green', marker='v', s=100, label='卖出', zorder=5)
+    axes[0].legend(loc='upper left')
 
     # Subplot 2: 账户净值
-    ax2 = axes[1]
-    # 计算基准收益（如果全仓持有不动）
     initial_price = prices[0]
     benchmark = [ORIGINAL_MONEY * (p / initial_price) for p in prices]
-    
-    ax2.plot(dates, net_worths, label='AI 策略净值', color='purple', linewidth=2)
-    ax2.plot(dates, benchmark, label='基准(买入持有)', color='gray', linestyle='--', alpha=0.5)
-    ax2.set_ylabel('资金')
-    ax2.legend(loc='upper left')
-    ax2.set_title("策略净值 vs 基准收益")
+    axes[1].plot(dates, net_worths, label='AI 策略净值', color='purple', linewidth=2)
+    axes[1].plot(dates, benchmark, label='基准(买入持有)', color='gray', linestyle='--', alpha=0.5)
+    axes[1].legend(loc='upper left')
 
     # Subplot 3: 仓位变化
-    ax3 = axes[2]
-    ax3.fill_between(dates, pos_ratio, color='orange', alpha=0.3, label='仓位占比')
-    ax3.plot(dates, pos_ratio, color='orange', linewidth=1)
-    ax3.set_ylim(-0.1, 1.1)
-    ax3.set_ylabel('仓位 (0-1)')
-    ax3.set_title("持仓比例变化")
+    axes[2].fill_between(dates, pos_ratio, color='orange', alpha=0.3)
+    axes[2].set_ylabel('仓位')
 
-    # Subplot 4: 动作强度 (Action)
-    ax4 = axes[3]
-    ax4.bar(dates, actions, color=np.where(np.array(actions)>0, 'red', 'green'), width=1.0)
-    ax4.set_ylim(-1.1, 1.1)
-    ax4.set_ylabel('动作 (-1卖 ~ 1买)')
-    ax4.axhline(0, color='black', linewidth=0.5)
-    ax4.set_title("AI 决策强度")
+    # Subplot 4: 动作强度
+    axes[3].bar(dates, actions, color=np.where(np.array(actions)>0, 'red', 'green'), width=1.0)
+    axes[3].set_ylabel('Action')
+
+    # --- Subplot 5: 核心：风险痛感分析 (r_risk) ---
+    ax5 = axes[4]
+    # 绘制风险惩罚曲线
+    ax5.plot(dates, r_risks, color='red', label='风险惩罚 (r_risk)', linewidth=1.5)
+    
+    # 填充均线保护区：当价格 > MA20 时，惩罚减半的区域
+    safe_zone = prices > ma20
+    ax5.fill_between(dates, min(r_risks), 0, where=safe_zone, color='green', alpha=0.1, label='MA20 保护开启')
+    
+    ax5.axhline(0, color='black', linewidth=0.8)
+    ax5.set_ylabel('痛感得分')
+    ax5.set_title("AI 承受的风险压力 (数值越低越痛)")
+    ax5.legend(loc='lower left')
 
     plt.tight_layout()
     plt.show()
@@ -246,27 +234,26 @@ if __name__ == "__main__":
         # 5. 运行回测循环
         records = {
             'dates': [], 'prices': [], 'net_worths': [], 
-            'actions': [], 'pos_ratio': []
+            'actions': [], 'pos_ratio': [], 'r_risks': [], 'ma20': []
         }
         
         done = False
         while not done:
-            # 记录 T 时刻的数据
-            current_date = env.dates[env.today] # 从 dataframe 获取真实日期
+            current_date = env.dates[env.today]
             current_price = env.prices[env.today]
+            current_ma20 = env.ma20 # 记录当前均线值
             
-            # AI 预测
-            action, _ = model.predict(obs, deterministic=True) # ⚠️ 必须 deterministic=True
-            
-            # 执行一步
+            action, _ = model.predict(obs, deterministic=True) 
             obs, reward, done, truncated, info = env.step(action)
             
-            # 收集数据
             records['dates'].append(current_date)
             records['prices'].append(current_price)
             records['net_worths'].append(info['net_worth'])
             records['actions'].append(float(action[0]))
             records['pos_ratio'].append(info['pos_ratio'])
+            # --- 新增记录 ---
+            records['r_risks'].append(info.get('ave_r_risk', 0)) # 记录平均风险分
+            records['ma20'].append(current_ma20)
 
         # 6. 画图
         print(f"✅ 回测完成，正在绘图...")

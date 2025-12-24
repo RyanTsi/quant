@@ -180,8 +180,8 @@ class SimpleStockEnv(gym.Env):
         self.max_drawdown = max(self.max_drawdown, drawdown)
         
         # 随着回撤天数增加，惩罚加重 (最大约 2.4 倍)
-        time_penalty = np.log1p(min(10, self.today - self.highest_worth_day))
-        
+        # time_penalty = np.log1p(min(10, self.today - self.highest_worth_day))
+        time_penalty = 1
         r_risk_down = drawdown * time_penalty
         
         # 如果价格在20日均线之上，说明可能是良性回调，惩罚减半
@@ -193,7 +193,7 @@ class SimpleStockEnv(gym.Env):
         r_repair = 0
         # 风险分
         r_risk = -r_risk_down + r_repair
-        r_risk *= 0.1
+        r_risk *= 0.005
         # C. 创新高 (简化)
         r_new_high = 0.0
         # 这里去掉了 target_value 的循环逻辑，简化为单纯的 Log 收益驱动
