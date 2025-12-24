@@ -1,9 +1,9 @@
-from datetime import datetime
-import pandas as pd
+# from datetime import datetime
+# import pandas as pd
 import numpy as np
-import rl.prehandle
-from database.influx_manager import InfluxDBManager, InfluxDBConfig, InfluxDBCallbacks
-from config import *
+# import rl.prehandle
+# from database.influx_manager import InfluxDBManager, InfluxDBConfig, InfluxDBCallbacks
+# from config import *
 
 # # 1. 初始化 InfluxDB
 # config = InfluxDBConfig(HOST, DATABASE, TOKEN)
@@ -47,6 +47,5 @@ from config import *
 #     # print(np.log(a) * 4)
 #     print(np.tanh(1))
 
-a = np.sinh(-2)
-b = np.log(1.2) * 20
-print(b)
+a = np.log1p(10)
+print(a)
