@@ -1,12 +1,17 @@
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
-from config import *
 import random
+from config import *
+
 
 class SimpleStockEnv(gym.Env):
     """
-    单一股票交易环境 (适配单 CPU + 自适应 Alpha)
+    单一股票交易环境 
+    特性: 
+    1. 适配单 CPU 训练
+    2. 自适应 Alpha (风险厌恶系数)
+    3. Alpha 作为一个特征输入到 Observation 中
     """
     def __init__(self, df_list: list):
         super(SimpleStockEnv, self).__init__()
@@ -14,15 +19,45 @@ class SimpleStockEnv(gym.Env):
         self.df_list = df_list
         self.stock_list_len = len(self.df_list)
         
-        # --- 核心修改 1: Alpha 初始值 ---
-        # 这里的 alpha 会被 Callback 通过 set_attr 动态修改
+        # --- 核心变量: Alpha ---
+        # 这个值可以通过 Callback 在外部动态修改
         self.alpha = 0.05
         
-        # 1. 动作空间: [-1, 1]
+        # 1. 动作空间: [-1, 1] 
+        # >0 买入比例, <0 卖出比例
         self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
 
-        # 2. 状态空间: Window + 6 个特征
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(WINDOW_SIZE + 6,), dtype=np.float32)
+        # 2. 状态空间: 
+        # [0:WINDOW_SIZE] -> 历史价格 Log Return 序列
+        # [+0] -> bias5
+        # [+1] -> bias20
+        # [+2] -> bias60
+        # [+3] -> ma_dist5_20
+        # [+4] -> cash_ratio
+        # [+5] -> position_ratio
+        # [+6] -> alpha
+        self.observation_space = spaces.Box(
+            low=-np.inf, 
+            high=np.inf, 
+            shape=(WINDOW_SIZE + 7,), 
+            dtype=np.float32
+        )
+
+        # 初始化一些占位符
+        self.current_df = None
+        self.prices = None
+        self.today = 0
+        self.last_day = 0
+        self.my_cash = 0
+        self.number_of_shares = 0
+        self.stock_history = []
+        self.ma5 = 0
+        self.ma20 = 0
+        
+        # 统计相关
+        self.highest_worth = 0
+        self.max_drawdown = 0
+        self.episode_rewards = {}
 
         self.reset()
 
@@ -32,11 +67,14 @@ class SimpleStockEnv(gym.Env):
         # 1. 随机选择一只股票
         stock_idx = random.randint(0, self.stock_list_len - 1)
         self.current_df = self.df_list[stock_idx]
+        
         self.prices = self.current_df['收盘'].values.astype(np.float32)
         total_len = len(self.prices)
         
         # 2. 随机选择时间段
+        # 必须保证有足够的历史数据做 Window (WINDOW_SIZE) 且有足够的未来数据做训练
         valid_range_len = total_len - WINDOW_SIZE - TRAINING_DAYS
+        
         if valid_range_len <= 0:
             start_index = 0
             self.last_day = total_len - 1
@@ -44,18 +82,19 @@ class SimpleStockEnv(gym.Env):
             start_index = random.randint(0, valid_range_len - 1)
             self.last_day = start_index + WINDOW_SIZE + TRAINING_DAYS
         
+        # 当前时间指针
         self.today = start_index + WINDOW_SIZE
 
         # 3. 初始化账户
         self.my_cash = ORIGINAL_MONEY 
         self.number_of_shares = 0 
 
-        # 4. 初始化统计指标 (Reset 时必须重置，否则 Info 会污染)
+        # 4. 初始化统计指标
         self.highest_worth = ORIGINAL_MONEY
         self.highest_worth_day = self.today
         self.max_drawdown = 0
         
-        # 统计平均 Reward 的容器
+        # 清空 Reward 记录容器
         self.episode_rewards = {
             "r_base": [], "r_risk": [], "r_new_high": []
         }
@@ -64,33 +103,39 @@ class SimpleStockEnv(gym.Env):
         self.ma5 = 0
         self.ma20 = 0
 
-        # 6. 初始化历史价格序列
+        # 6. 初始化历史价格序列 (预热 Window)
         self.stock_history = []
+        # 获取当前时间点之前的窗口价格
         current_window_prices = self.prices[self.today - WINDOW_SIZE : self.today + 1]
+        
         for i in range(WINDOW_SIZE):
             p_curr = current_window_prices[i]
             p_next = current_window_prices[i+1]
-            if p_curr == 0: p_curr = 1e-5 
             
+            if p_curr == 0: p_curr = 1e-5 # 防止除零
+            
+            # 计算对数收益率并缩放
             delta_ratio = np.log(p_next / p_curr) * INCR_PARA
             self.stock_history.append(delta_ratio)
 
         return self._get_observation(), {}
 
     def _get_observation(self):
-        # 基础价格历史
+        # --- A. 基础价格历史 ---
         history = np.array(self.stock_history.copy(), dtype=np.float32)
         
-        # 噪声注入 (Noise Injection)
-        noise = np.random.normal(0, 0.01, size=history.shape) 
+        # 噪声注入 (Noise Injection): 增加模型鲁棒性
+        noise = np.random.normal(0, 0.005, size=history.shape) 
         history = history + noise
+        
+        # Dropout (Mask): 随机遮盖部分历史数据
         if np.random.rand() < 0.05:
             mask = np.random.binomial(1, 0.9, size=history.shape)
             history = history * mask 
 
-        # 均线与乖离率 (Bias)
+        # --- B. 均线与乖离率 (Technical Indicators) ---
         current_idx = self.today
-        # 防止索引越界，取最近 65 天
+        # 防止索引越界，取最近 65 天 (计算 Bias60 需要)
         start_idx = max(0, current_idx - 65)
         window_prices = self.prices[start_idx : current_idx + 1]
         
@@ -111,10 +156,10 @@ class SimpleStockEnv(gym.Env):
         self.ma5 = get_ma(window_prices, 5)
         self.ma20 = get_ma(window_prices, 20)
         
-        # 均线距离 (避免除零)
+        # 均线距离
         ma_dist5_20 = (self.ma5 - self.ma20) / (self.ma20 + 1e-8) * INCR_PARA
 
-        # 仓位状态
+        # --- C. 仓位状态 (Position Status) ---
         current_price = self.prices[self.today]
         current_net_worth = self.my_cash + self.number_of_shares * current_price
         
@@ -125,10 +170,12 @@ class SimpleStockEnv(gym.Env):
             cash_ratio = self.my_cash / current_net_worth
             position_ratio = 1.0 - cash_ratio
         
+        # --- D. 拼接最终 Observation ---
         obs = np.concatenate([
-            history, 
-            [bias5, bias20, bias60, ma_dist5_20],
-            [cash_ratio, position_ratio]
+            history,                                # 历史 Log Return
+            [bias5, bias20, bias60, ma_dist5_20],   # 技术指标
+            [cash_ratio, position_ratio],           # 仓位信息
+            [self.alpha]                            # Alpha 参数
         ]).astype(np.float32)
         
         return obs
@@ -138,6 +185,7 @@ class SimpleStockEnv(gym.Env):
         current_price = self.prices[self.today]
         prev_net_worth = self.my_cash + self.number_of_shares * current_price
         
+        # 截断动作范围
         act = np.clip(action[0], -1, 1)
         
         # 交易逻辑
@@ -145,13 +193,13 @@ class SimpleStockEnv(gym.Env):
             can_buy_cash = self.my_cash * act
             shares_to_buy = int(can_buy_cash // current_price)
             if shares_to_buy > 0:
-                cost = shares_to_buy * current_price * 1.0005 # 手续费
+                cost = shares_to_buy * current_price * 1.0005 # 买入费率 0.05%
                 self.my_cash -= cost
                 self.number_of_shares += shares_to_buy
         elif act < 0: # 卖出
             shares_to_sell = int(self.number_of_shares * abs(act))
             if shares_to_sell > 0:
-                gain = shares_to_sell * current_price * 0.9995 # 手续费
+                gain = shares_to_sell * current_price * 0.9995 # 卖出费率 0.05%
                 self.my_cash += gain
                 self.number_of_shares -= shares_to_sell
 
@@ -174,32 +222,21 @@ class SimpleStockEnv(gym.Env):
         # A. 基础收益 (Base Reward)
         r_base = np.log((current_net_worth + 1e-8) / (prev_net_worth + 1e-8)) * INCR_PARA 
 
-        # B. 风险调整 (Risk)
+        # B. 风险调整 (Risk Penalty)
         # 动态计算回撤幅度
         drawdown = (self.highest_worth - current_net_worth) / self.highest_worth * INCR_PARA
         self.max_drawdown = max(self.max_drawdown, drawdown)
         
-        # 随着回撤天数增加，惩罚加重 (最大约 2.4 倍)
-        # time_penalty = np.log1p(min(10, self.today - self.highest_worth_day))
+        # 时间惩罚系数 (目前设为1，可调整)
         time_penalty = 1
         r_risk_down = drawdown * time_penalty
         
-        # 如果价格在20日均线之上，说明可能是良性回调，惩罚减半
-        if next_price > self.ma20:
-            r_risk_down *= 0.5
-
-        # 资产回升给予微量补偿
-        # r_repair = min((current_net_worth - prev_net_worth) / self.highest_worth, r_risk_down * 0.5) # to check
-        r_repair = 0
-        # 风险分
-        r_risk = -r_risk_down + r_repair
-        r_risk *= 0.005
-        # C. 创新高 (简化)
-        r_new_high = 0.0
-        # 这里去掉了 target_value 的循环逻辑，简化为单纯的 Log 收益驱动
+        r_risk = -r_risk_down
+        r_risk *= 0.005 # 缩放系数
+        
 
         # --- 5. 最终加权 (Combined Reward) ---
-        # 调整量级：如果 r_risk_down 太大，可以乘个系数比如 0.5
+        # 使用 self.alpha 动态调节风险权重
         total_reward = r_base + (r_risk * self.alpha) 
 
         # 裁剪防止梯度爆炸
@@ -208,7 +245,6 @@ class SimpleStockEnv(gym.Env):
         # --- 6. 记录统计信息 ---
         self.episode_rewards["r_base"].append(r_base)
         self.episode_rewards["r_risk"].append(r_risk)
-        self.episode_rewards["r_new_high"].append(r_new_high)
 
         # 构造 Info
         info = {
@@ -216,18 +252,18 @@ class SimpleStockEnv(gym.Env):
             "max_drawdown": float(self.max_drawdown),
             "alpha": float(self.alpha),
             "pos_ratio": float((self.number_of_shares * next_price) / current_net_worth) if current_net_worth > 0 else 0,
-            # 计算本局目前的平均值，供 Callback 使用
-            "ave_r_base": np.mean(self.episode_rewards["r_base"]),
-            "ave_r_risk": np.mean(self.episode_rewards["r_risk"]),
-            "max_r_base": np.max(np.abs(self.episode_rewards["r_base"])),
-            "max_r_risk": np.max(np.abs(self.episode_rewards["r_risk"])),
+            # 统计均值供 Callback 使用
+            "ave_r_base": np.mean(self.episode_rewards["r_base"]) if self.episode_rewards["r_base"] else 0,
+            "ave_r_risk": np.mean(self.episode_rewards["r_risk"]) if self.episode_rewards["r_risk"] else 0,
         }
 
-        # 更新历史状态 (Rolling Update)
-        if prev_net_worth == 0: prev_net_worth = 1e-8
+        # --- 7. 更新历史状态 (Rolling Update) ---
+        # 计算 T 到 T+1 的收益率，推入 history
+        if prev_net_worth == 0: prev_net_worth = 1e-8 # 理论上不应发生
         delta_ratio = np.log(next_price / current_price) * INCR_PARA
         
         self.stock_history.pop(0)
         self.stock_history.append(delta_ratio)
 
+        # 返回 (observation, reward, terminated, truncated, info)
         return self._get_observation(), float(total_reward), terminated, False, info
