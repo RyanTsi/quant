@@ -139,7 +139,7 @@ if __name__ == "__main__":
         val_env,
         best_model_save_path='./best_model/',
         log_path=VAL_LOG_DIR,
-        eval_freq=10_000,
+        eval_freq=1_000,
         n_eval_episodes=50,     
         deterministic=True,
         render=False
@@ -162,7 +162,7 @@ if __name__ == "__main__":
     
     # 网络架构：可以适当加宽，以处理更复杂的状态（Alpha输入）
     policy_kwargs = dict(
-        net_arch=dict(pi=[400, 300], qf=[400, 300]),
+        net_arch=dict(pi=[128, 128], qf=[128, 128]),
         activation_fn=torch.nn.ReLU
     )
     

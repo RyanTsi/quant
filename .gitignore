@@ -7,4 +7,4 @@ stock_data
 __pycache__
 *.zip
 *.pkl
-tensorboard_logs
+tensorboard_logs*

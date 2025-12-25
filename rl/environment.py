@@ -28,7 +28,7 @@ class SimpleStockEnv(gym.Env):
         self.rf_annual = 0.025
         self.rf_daily = (1 + self.rf_annual) ** (1/250) - 1
         
-        self.turnover_coef = 0.1
+        self.turnover_coef = 0.002 * INCR_PARA
         # 1. 动作空间: [-1, 1] (买入/卖出比例)
         self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
 
@@ -298,7 +298,8 @@ class SimpleStockEnv(gym.Env):
         self.last_action = act
         
         # E. 总 Reward
-        total_reward = r_base + r_risk_val + r_risk_free + r_turnover
+        total_reward = r_base 
+        # + r_risk_val + r_risk_free + r_turnover
         total_reward = np.clip(total_reward, -10.0, 10.0)
 
         # --- 6. 统计记录 ---
