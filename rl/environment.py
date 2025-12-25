@@ -2,27 +2,18 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 import random
+from config import *
 
-# ==========================================
-# Config 部分 
-# ==========================================
-try:
-    from config import *
-except ImportError:
-    # 默认配置（如果 config.py 不存在）
-    WINDOW_SIZE = 30       
-    TRAINING_DAYS = 200    
-    ORIGINAL_MONEY = 100000 
-    INCR_PARA = 100.0      
+   
 
 class SimpleStockEnv(gym.Env):
     """
-    单一股票交易环境 (增强版)
+    单一股票交易环境 (增强版 - v2)
     
-    特性:
-    1. 盘中价格模拟: 线性模型 + 布朗桥噪声 (Brownian Bridge Noise)
-    2. 风险控制: 回撤扩张惩罚 (Drawdown Expansion Penalty)
-    3. 状态空间: 增加 '距离收盘时间' 特征
+    修改记录:
+    1. Alpha 分布优化: 混合分布 (Uniform + Normal)
+    2. 风险权重调整: Lambda = 1.0
+    3. 新增机制: 现金无风险收益 (防止横盘躺平)
     """
     def __init__(self, df_list: list):
         super(SimpleStockEnv, self).__init__()
@@ -30,8 +21,12 @@ class SimpleStockEnv(gym.Env):
         self.df_list = df_list
         self.stock_list_len = len(self.df_list)
         
-        # 风险厌恶系数
-        self.alpha = 0.05
+        # 风险厌恶系数 (将在 reset 中动态生成)
+        self.alpha = 0.5
+        
+        # [配置] 年化无风险利率 (2.5%) -> 用于计算现金奖励
+        self.rf_annual = 0.025
+        self.rf_daily = (1 + self.rf_annual) ** (1/250) - 1
         
         # 1. 动作空间: [-1, 1] (买入/卖出比例)
         self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
@@ -40,7 +35,7 @@ class SimpleStockEnv(gym.Env):
         # [0:WINDOW_SIZE] -> 历史价格 Log Return
         # [+0..+3] -> 技术指标 (bias, ma_dist)
         # [+4..+5] -> 仓位信息 (cash, position)
-        # [+7] -> open_gap (开盘相对于昨收的涨跌幅)
+        # [+6] -> open_gap (开盘相对于昨收的涨跌幅)
         # [+7] -> time_remaining (0.0=收盘, 1.0=开盘)
         # [+8] -> alpha
         self.observation_space = spaces.Box(
@@ -79,13 +74,20 @@ class SimpleStockEnv(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         
-        # --- 1. 数据准备 ---
-        self.alpha = np.random.uniform(0, 1)
+        # --- 1. Alpha 设置策略 ---
+        rand_val = np.random.random()
+        if rand_val < 0.8:
+            self.alpha = float(np.random.uniform(0.0, 1.0))
+        else:
+            # 均值 0.5, 标准差 0.15, 截断在 [0, 1]
+            val = np.random.normal(0.5, 0.15)
+            self.alpha = float(np.clip(val, 0.0, 1.0))
+
+        # --- 数据准备 ---
         stock_idx = random.randint(0, self.stock_list_len - 1)
         self.current_df = self.df_list[stock_idx]
         
         self.prices_close = self.current_df['收盘'].values.astype(np.float32)
-        # 尝试获取开盘价，如果没有则用收盘价兜底
         if '开盘' in self.current_df.columns:
             self.prices_open = self.current_df['开盘'].values.astype(np.float32)
         else:
@@ -93,7 +95,7 @@ class SimpleStockEnv(gym.Env):
 
         total_len = len(self.prices_close)
         
-        # --- 2. 时间窗口选择 ---
+        # --- 时间窗口选择 ---
         valid_range_len = total_len - WINDOW_SIZE - TRAINING_DAYS
         if valid_range_len <= 0:
             start_index = 0
@@ -104,7 +106,7 @@ class SimpleStockEnv(gym.Env):
         
         self.today = start_index + WINDOW_SIZE
 
-        # --- 3. 账户与统计重置 ---
+        # --- 账户与统计重置 ---
         self.my_cash = ORIGINAL_MONEY 
         self.number_of_shares = 0 
         
@@ -113,19 +115,18 @@ class SimpleStockEnv(gym.Env):
         self.max_drawdown_global = 0
         
         self.episode_rewards = {
-            "r_base": [], "r_base_pos": [], "r_base_neg": [], "r_risk": []
+            "r_base": [], "r_base_pos": [], "r_base_neg": [], 
+            "r_risk": [], "r_cash": []
         }
 
-        # --- 4. 初始化模拟价格 ---
-        # 随机生成一个初始时间点
+        # --- 初始化模拟价格 ---
         self.time_remaining = random.random() 
         self.current_price = self._calculate_noisy_price(self.today, self.time_remaining)
 
-        # --- 5. 历史数据预热 (Window) ---
+        # --- 历史数据预热 ---
         self.ma5 = 0; self.ma20 = 0
         self.stock_history = []
         
-        # 这里的 history 依然使用标准的日线收盘价 (Stable features)
         current_window_prices = self.prices_close[self.today - WINDOW_SIZE : self.today + 1]
         
         for i in range(WINDOW_SIZE):
@@ -138,63 +139,47 @@ class SimpleStockEnv(gym.Env):
         return self._get_observation(), {}
 
     def _calculate_noisy_price(self, day_idx, time_rem):
-        """
-        核心函数: 计算带噪声的盘中价格
-        公式: P = Linear(Open, Close) + Noise
-        特性: 噪声在 Open 和 Close 处为 0，在中间最大
-        """
+        """ 计算带噪声的盘中价格 (Brownian Bridge) """
         p_open = self.prices_open[day_idx]
         p_close = self.prices_close[day_idx]
         
-        # 1. 线性基准 (Linear Baseline)
-        # time_rem: 1.0 (Open) -> 0.0 (Close)
         linear_price = p_open + (p_close - p_open) * (1.0 - time_rem)
-        
-        # 2. 动态波动率估计 (Volatility Estimation)
-        # 估计当天的波动范围，如果 Open==Close，给一个极小的默认波动
         daily_volatility = abs(p_close - p_open) + (p_open * 0.002) 
         
-        # 3. 布朗桥噪声系数 (Bridge Factor)
-        # 在 time=1 和 time=0 时为 0，在 time=0.5 时最大(0.25)
-        # 乘以 4 是为了让中间的系数归一化到 1.0 左右
+        # 桥接因子：两端为0，中间最大
         bridge_factor = time_rem * (1.0 - time_rem) * 4.0 
         
-        # 4. 生成噪声
-        # np.random.normal(0, 0.1) -> 假设标准差为日波动的 10%
         noise = np.random.normal(0, 0.1) * daily_volatility * bridge_factor
-        
         final_price = linear_price + noise
         
-        # 兜底防止负价格
         return max(1e-5, final_price)
 
     def _get_observation(self):
         # --- A. 历史序列 ---
         history = np.array(self.stock_history.copy(), dtype=np.float32)
-        # 观测噪声 (Observation Noise)
+        
+        # 观测噪声
         noise = np.random.normal(0, 0.005, size=history.shape) 
         history = history + noise
-        # 随机 Dropout
+        
+        # 随机 Dropout (增强鲁棒性)
         if np.random.rand() < 0.05:
             history = history * np.random.binomial(1, 0.9, size=history.shape)
 
-        # --- B. 技术指标 (基于收盘价) ---
+        # --- B. 技术指标 ---
         current_idx = self.today
         start_idx = max(0, current_idx - 65)
         window_prices = self.prices_close[start_idx : current_idx + 1]
-        # 获取昨天的收盘价
+        
         if self.today > 0:
             prev_close = self.prices_close[self.today - 1]
         else:
-            # 如果是第一天，用当天的开盘价模拟昨收，即认为没有跳空
             prev_close = self.prices_open[self.today]
             
         current_open = self.prices_open[self.today]
-        
-        # 防止除零 (虽然股价通常不为0)
         if prev_close <= 0: prev_close = 1e-5
         
-        # 计算 Log Return 并缩放
+        # 开盘跳空
         open_gap = np.log(current_open / prev_close) * INCR_PARA
 
         def get_bias(p_array, period):
@@ -214,8 +199,7 @@ class SimpleStockEnv(gym.Env):
         self.ma20 = get_ma(window_prices, 20)
         ma_dist5_20 = (self.ma5 - self.ma20) / (self.ma20 + 1e-8) * INCR_PARA
 
-        # --- C. 仓位 (基于模拟成交价) ---
-        # 使用 self.current_price 即使盘中计算净值
+        # --- C. 仓位 ---
         current_net_worth = self.my_cash + self.number_of_shares * self.current_price
         
         if current_net_worth <= 0:
@@ -231,14 +215,14 @@ class SimpleStockEnv(gym.Env):
             [cash_ratio, position_ratio],
             [open_gap],
             [self.time_remaining],
-            [self.alpha]
+            [self.alpha] 
         ]).astype(np.float32)
         
         return obs
 
     def step(self, action):
-        # --- 1. 执行交易 (基于当前模拟价格) ---
-        # 此时的 self.current_price 是上一次 step 或 reset 计算出的
+        # --- 1. 执行交易 ---
+        # 记录上一步净值用于计算 Reward
         prev_net_worth = self.my_cash + self.number_of_shares * self.current_price
         
         act = np.clip(action[0], -1, 1)
@@ -247,7 +231,6 @@ class SimpleStockEnv(gym.Env):
             can_buy_cash = self.my_cash * act
             shares_to_buy = int(can_buy_cash // self.current_price)
             if shares_to_buy > 0:
-                # 包含万分之五滑点/手续费
                 cost = shares_to_buy * self.current_price * 1.0005 
                 self.my_cash -= cost
                 self.number_of_shares += shares_to_buy
@@ -258,7 +241,7 @@ class SimpleStockEnv(gym.Env):
                 self.my_cash += gain
                 self.number_of_shares -= shares_to_sell
 
-        # --- 2. 状态推演 (T -> T+1) ---
+        # --- 2. 状态推演 ---
         terminated = self.today >= self.last_day
         if not terminated:
             self.today += 1 
@@ -268,36 +251,45 @@ class SimpleStockEnv(gym.Env):
 
         # 创新高逻辑
         if current_net_worth > self.highest_worth:
-            self.max_drawdown_cur = 0 # 重置回撤
+            self.max_drawdown_cur = 0 
             self.highest_worth = current_net_worth
 
-        # --- 4. Reward 计算 ---
+        # --- 4. Reward 计算 (核心修改部分) ---
         
-        # A. 基础收益
+        # A. 基础收益 (Base Return)
+        # 包含股票涨跌 + 交易滑点成本
         r_base = np.log((current_net_worth + 1e-8) / (prev_net_worth + 1e-8)) * INCR_PARA 
 
-        # B. 风险调整 (回撤扩张惩罚)
+        # B. 现金无风险收益 (Risk-Free Reward)
+        # 目的：防止横盘时死拿股票。如果股票不涨，持有现金是有奖励的。
+        if current_net_worth > 0:
+            curr_cash_ratio = self.my_cash / current_net_worth
+        else:
+            curr_cash_ratio = 0.0
+            
+        # 计算逻辑：(现金比例 * 日化无风险收益) * 缩放系数
+        # 这样 r_risk_free 和 r_base 就在同一个数量级上
+        r_risk_free = curr_cash_ratio * self.rf_daily * INCR_PARA
+
+        # C. 风险调整 (回撤惩罚)
         drawdown = (self.highest_worth - current_net_worth) / self.highest_worth * INCR_PARA
         
-        r_risk_down = 0.0
-        # 只有当回撤【扩大】时才惩罚
+        r_risk_val = 0.0
         if drawdown > self.max_drawdown_cur:
-            r_risk_down = (drawdown - self.max_drawdown_cur)
-        
-        # 更新记录
+            dd_diff = drawdown - self.max_drawdown_cur
+            r_risk_val = - (dd_diff * self.alpha * 1.0)
+            
         self.max_drawdown_cur = max(self.max_drawdown_cur, drawdown)
         self.max_drawdown_global = max(self.max_drawdown_global, drawdown)
 
-        # 风险惩罚项
-        r_risk = -r_risk_down * self.alpha * 0.8
-        
-        # 最终 Reward
-        total_reward = r_base + r_risk
+        # D. 总 Reward
+        total_reward = r_base + r_risk_val + r_risk_free
         total_reward = np.clip(total_reward, -10.0, 10.0)
 
         # --- 6. 统计记录 ---
         self.episode_rewards["r_base"].append(r_base)
-        self.episode_rewards["r_risk"].append(r_risk)
+        self.episode_rewards["r_risk"].append(r_risk_val)
+        self.episode_rewards["r_cash"].append(r_risk_free)
         
         if r_base > 0:
             self.episode_rewards["r_base_pos"].append(r_base)
@@ -308,23 +300,23 @@ class SimpleStockEnv(gym.Env):
 
         info = {
             "net_worth": float(current_net_worth),
-            "price": float(self.current_price),    # 当前成交价
-            "time_rem": float(self.time_remaining),# 离收盘还有多久
-            "max_dd_global": float(self.max_drawdown_global),
-            "max_dd_cur": float(self.max_drawdown_cur),
+            "price": float(self.current_price),
+            "max_dd": float(self.max_drawdown_global),
             "alpha": float(self.alpha),
             
             "ave_r_base": safe_mean(self.episode_rewards["r_base"]),
             "ave_r_base_pos": safe_mean(self.episode_rewards["r_base_pos"]),
             "ave_r_base_neg": safe_mean(self.episode_rewards["r_base_neg"]),
             "ave_r_risk": safe_mean(self.episode_rewards["r_risk"]),
+            "ave_r_cash": safe_mean(self.episode_rewards["r_cash"]),
         }
 
-        # --- 7. 更新历史序列 (Rolling) ---
-        # 使用收盘价更新 History (保持特征稳定性)
+        # --- 7. 更新历史序列 ---
         p_close_curr = self.prices_close[self.today-1] if self.today > 0 else self.prices_close[0]
         p_close_next = self.prices_close[self.today]
         delta_ratio = np.log(p_close_next / p_close_curr) * INCR_PARA
+        self.time_remaining = random.random() # 下一步的随机时间点
+        self.current_price = self._calculate_noisy_price(self.today, self.time_remaining)
         
         self.stock_history.pop(0)
         self.stock_history.append(delta_ratio)
