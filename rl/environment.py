@@ -28,6 +28,7 @@ class SimpleStockEnv(gym.Env):
         self.rf_annual = 0.025
         self.rf_daily = (1 + self.rf_annual) ** (1/250) - 1
         
+        self.turnover_coef = 0.1
         # 1. 动作空间: [-1, 1] (买入/卖出比例)
         self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
 
@@ -59,7 +60,8 @@ class SimpleStockEnv(gym.Env):
         self.stock_history = []
         self.ma5 = 0
         self.ma20 = 0
-        
+        self.last_action = 0.0
+
         # 时间模拟 (1.0 = 开盘, 0.0 = 收盘)
         self.time_remaining = 0.0 
         
@@ -113,10 +115,12 @@ class SimpleStockEnv(gym.Env):
         self.highest_worth = ORIGINAL_MONEY
         self.max_drawdown_cur = 0 
         self.max_drawdown_global = 0
-        
+        self.last_action = 0.0
+
         self.episode_rewards = {
             "r_base": [], "r_base_pos": [], "r_base_neg": [], 
-            "r_risk": [], "r_cash": []
+            "r_risk": [], "r_cash": [],
+            "r_turnover": []
         }
 
         # --- 初始化模拟价格 ---
@@ -281,15 +285,27 @@ class SimpleStockEnv(gym.Env):
             
         self.max_drawdown_cur = max(self.max_drawdown_cur, drawdown)
         self.max_drawdown_global = max(self.max_drawdown_global, drawdown)
-
-        # D. 总 Reward
-        total_reward = r_base + r_risk_val + r_risk_free
+        
+        # D. 交易摩擦惩罚 (Turnover Penalty)
+        # 计算动作变化幅度 (例如: 上次 0.5, 这次 -0.5, 变化量是 1.0)
+        action_change = np.abs(act - self.last_action)
+        
+        # 惩罚项: 系数 * 变化幅度
+        # 这就像是给频繁换手征收的 "智商税"，强迫它思考清楚再动
+        r_turnover = - self.turnover_coef * action_change
+        
+        # 更新上一步动作，供下一步使用
+        self.last_action = act
+        
+        # E. 总 Reward
+        total_reward = r_base + r_risk_val + r_risk_free + r_turnover
         total_reward = np.clip(total_reward, -10.0, 10.0)
 
         # --- 6. 统计记录 ---
         self.episode_rewards["r_base"].append(r_base)
         self.episode_rewards["r_risk"].append(r_risk_val)
         self.episode_rewards["r_cash"].append(r_risk_free)
+        self.episode_rewards["r_turnover"].append(r_turnover)
         
         if r_base > 0:
             self.episode_rewards["r_base_pos"].append(r_base)
@@ -307,6 +323,7 @@ class SimpleStockEnv(gym.Env):
             "ave_r_base": safe_mean(self.episode_rewards["r_base"]),
             "ave_r_base_pos": safe_mean(self.episode_rewards["r_base_pos"]),
             "ave_r_base_neg": safe_mean(self.episode_rewards["r_base_neg"]),
+            "ave_r_turnover": safe_mean(self.episode_rewards["r_turnover"]),
             "ave_r_risk": safe_mean(self.episode_rewards["r_risk"]),
             "ave_r_cash": safe_mean(self.episode_rewards["r_cash"]),
         }
@@ -317,7 +334,7 @@ class SimpleStockEnv(gym.Env):
         delta_ratio = np.log(p_close_next / p_close_curr) * INCR_PARA
         self.time_remaining = random.random() # 下一步的随机时间点
         self.current_price = self._calculate_noisy_price(self.today, self.time_remaining)
-        
+
         self.stock_history.pop(0)
         self.stock_history.append(delta_ratio)
 

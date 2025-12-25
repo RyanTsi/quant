@@ -45,7 +45,9 @@ class DetailedLogCallback(BaseCallback):
                 self.logger.record("rewards/4_cash_interest", info["ave_r_cash"])
             if "ave_r_risk" in info:
                 self.logger.record("rewards/5_risk_penalty", info["ave_r_risk"])
-            
+            if "ave_r_turnover" in info:
+                self.logger.record("rewards/6_turnover_penalty", info["ave_r_turnover"])
+
             # --- 2. 记录资产状态 ---
             if "net_worth" in info:
                 self.logger.record("status/net_worth", info["net_worth"])
