@@ -212,8 +212,8 @@ if __name__ == "__main__":
             tau=0.005,
             gamma=0.99,
             learning_rate=1e-4,
-            train_freq=7,
-            gradient_steps=1,
+            train_freq=20,
+            gradient_steps=20,
             ent_coef='auto',
         )
         target_steps = ADDITIONAL_STEPS

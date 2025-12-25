@@ -12,6 +12,7 @@ class SimpleStockEnv(gym.Env):
     1. 适配单 CPU 训练
     2. 自适应 Alpha (风险厌恶系数)
     3. Alpha 作为一个特征输入到 Observation 中
+    4. 分别统计 r_base 的正向均值和负向均值
     """
     def __init__(self, df_list: list):
         super(SimpleStockEnv, self).__init__()
@@ -20,11 +21,9 @@ class SimpleStockEnv(gym.Env):
         self.stock_list_len = len(self.df_list)
         
         # --- 核心变量: Alpha ---
-        # 这个值可以通过 Callback 在外部动态修改
         self.alpha = 0.05
         
         # 1. 动作空间: [-1, 1] 
-        # >0 买入比例, <0 卖出比例
         self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
 
         # 2. 状态空间: 
@@ -43,7 +42,7 @@ class SimpleStockEnv(gym.Env):
             dtype=np.float32
         )
 
-        # 初始化一些占位符
+        # 初始化占位符
         self.current_df = None
         self.prices = None
         self.today = 0
@@ -56,7 +55,8 @@ class SimpleStockEnv(gym.Env):
         
         # 统计相关
         self.highest_worth = 0
-        self.max_drawdown = 0
+        self.max_drawdown_cur = 0
+        self.max_drawdown_rec = 0
         self.episode_rewards = {}
 
         self.reset()
@@ -72,7 +72,6 @@ class SimpleStockEnv(gym.Env):
         total_len = len(self.prices)
         
         # 2. 随机选择时间段
-        # 必须保证有足够的历史数据做 Window (WINDOW_SIZE) 且有足够的未来数据做训练
         valid_range_len = total_len - WINDOW_SIZE - TRAINING_DAYS
         
         if valid_range_len <= 0:
@@ -91,12 +90,13 @@ class SimpleStockEnv(gym.Env):
 
         # 4. 初始化统计指标
         self.highest_worth = ORIGINAL_MONEY
-        self.highest_worth_day = self.today
-        self.max_drawdown = 0
-        
-        # 清空 Reward 记录容器
+        self.max_drawdown_cur = 0
+        self.max_drawdown_rec = 0
         self.episode_rewards = {
-            "r_base": [], "r_risk": [], "r_new_high": []
+            "r_base": [],      # 所有的 base reward
+            "r_base_pos": [],  # 盈利
+            "r_base_neg": [],  # 亏损
+            "r_risk": []       # 所有的 risk reward
         }
 
         # 5. 初始化 Ma/Info 占位符
@@ -105,16 +105,14 @@ class SimpleStockEnv(gym.Env):
 
         # 6. 初始化历史价格序列 (预热 Window)
         self.stock_history = []
-        # 获取当前时间点之前的窗口价格
         current_window_prices = self.prices[self.today - WINDOW_SIZE : self.today + 1]
         
         for i in range(WINDOW_SIZE):
             p_curr = current_window_prices[i]
             p_next = current_window_prices[i+1]
             
-            if p_curr == 0: p_curr = 1e-5 # 防止除零
+            if p_curr == 0: p_curr = 1e-5 
             
-            # 计算对数收益率并缩放
             delta_ratio = np.log(p_next / p_curr) * INCR_PARA
             self.stock_history.append(delta_ratio)
 
@@ -124,18 +122,17 @@ class SimpleStockEnv(gym.Env):
         # --- A. 基础价格历史 ---
         history = np.array(self.stock_history.copy(), dtype=np.float32)
         
-        # 噪声注入 (Noise Injection): 增加模型鲁棒性
+        # 噪声注入
         noise = np.random.normal(0, 0.005, size=history.shape) 
         history = history + noise
         
-        # Dropout (Mask): 随机遮盖部分历史数据
+        # Dropout
         if np.random.rand() < 0.05:
             mask = np.random.binomial(1, 0.9, size=history.shape)
             history = history * mask 
 
-        # --- B. 均线与乖离率 (Technical Indicators) ---
+        # --- B. 均线与乖离率 ---
         current_idx = self.today
-        # 防止索引越界，取最近 65 天 (计算 Bias60 需要)
         start_idx = max(0, current_idx - 65)
         window_prices = self.prices[start_idx : current_idx + 1]
         
@@ -156,10 +153,9 @@ class SimpleStockEnv(gym.Env):
         self.ma5 = get_ma(window_prices, 5)
         self.ma20 = get_ma(window_prices, 20)
         
-        # 均线距离
         ma_dist5_20 = (self.ma5 - self.ma20) / (self.ma20 + 1e-8) * INCR_PARA
 
-        # --- C. 仓位状态 (Position Status) ---
+        # --- C. 仓位状态 ---
         current_price = self.prices[self.today]
         current_net_worth = self.my_cash + self.number_of_shares * current_price
         
@@ -172,10 +168,10 @@ class SimpleStockEnv(gym.Env):
         
         # --- D. 拼接最终 Observation ---
         obs = np.concatenate([
-            history,                                # 历史 Log Return
-            [bias5, bias20, bias60, ma_dist5_20],   # 技术指标
-            [cash_ratio, position_ratio],           # 仓位信息
-            [self.alpha]                            # Alpha 参数
+            history,                            # 历史 Log Return
+            [bias5, bias20, bias60, ma_dist5_20], # 技术指标
+            [cash_ratio, position_ratio],       # 仓位信息
+            [self.alpha]                        # Alpha 参数
         ]).astype(np.float32)
         
         return obs
@@ -185,21 +181,19 @@ class SimpleStockEnv(gym.Env):
         current_price = self.prices[self.today]
         prev_net_worth = self.my_cash + self.number_of_shares * current_price
         
-        # 截断动作范围
         act = np.clip(action[0], -1, 1)
         
-        # 交易逻辑
         if act > 0: # 买入
             can_buy_cash = self.my_cash * act
             shares_to_buy = int(can_buy_cash // current_price)
             if shares_to_buy > 0:
-                cost = shares_to_buy * current_price * 1.0005 # 买入费率 0.05%
+                cost = shares_to_buy * current_price * 1.0005 
                 self.my_cash -= cost
                 self.number_of_shares += shares_to_buy
         elif act < 0: # 卖出
             shares_to_sell = int(self.number_of_shares * abs(act))
             if shares_to_sell > 0:
-                gain = shares_to_sell * current_price * 0.9995 # 卖出费率 0.05%
+                gain = shares_to_sell * current_price * 0.9995 
                 self.my_cash += gain
                 self.number_of_shares -= shares_to_sell
 
@@ -212,9 +206,8 @@ class SimpleStockEnv(gym.Env):
         next_price = self.prices[self.today]
         current_net_worth = self.my_cash + self.number_of_shares * next_price
 
-        # 更新最高资产记录 (用于计算回撤)
         if current_net_worth > self.highest_worth:
-            self.highest_worth_day = self.today
+            self.max_drawdown_cur = 0
             self.highest_worth = current_net_worth
 
         # --- 4. Reward 计算 ---
@@ -223,47 +216,59 @@ class SimpleStockEnv(gym.Env):
         r_base = np.log((current_net_worth + 1e-8) / (prev_net_worth + 1e-8)) * INCR_PARA 
 
         # B. 风险调整 (Risk Penalty)
-        # 动态计算回撤幅度
         drawdown = (self.highest_worth - current_net_worth) / self.highest_worth * INCR_PARA
-        self.max_drawdown = max(self.max_drawdown, drawdown)
-        
-        # 时间惩罚系数 (目前设为1，可调整)
-        time_penalty = 1
-        r_risk_down = drawdown * time_penalty
-        
-        r_risk = -r_risk_down
-        r_risk *= 0.005 # 缩放系数
-        
+        r_risk_down = 0
+        if drawdown > self.max_drawdown_cur:
+            r_risk_down = (drawdown - self.max_drawdown_cur)
+        self.max_drawdown_cur = max(self.max_drawdown_cur, drawdown)
+        self.max_drawdown_rec = max(self.max_drawdown_rec, drawdown)
 
+        
+        # 这里使用了你提供的简化版 risk 计算逻辑
+        r_risk = -r_risk_down * self.alpha * 0.8
+        
         # --- 5. 最终加权 (Combined Reward) ---
-        # 使用 self.alpha 动态调节风险权重
-        total_reward = r_base + (r_risk * self.alpha) 
-
-        # 裁剪防止梯度爆炸
+        total_reward = r_base + r_risk
         total_reward = np.clip(total_reward, -10.0, 10.0)
 
         # --- 6. 记录统计信息 ---
+        
+        # 记录所有的 base reward
         self.episode_rewards["r_base"].append(r_base)
         self.episode_rewards["r_risk"].append(r_risk)
+        
+        # --- 修改点 2: 分别记录正负收益 ---
+        if r_base > 0:
+            self.episode_rewards["r_base_pos"].append(r_base)
+        elif r_base < 0:
+            self.episode_rewards["r_base_neg"].append(r_base)
+        
+        # 辅助函数：计算均值，如果是空列表则返回 0
+        def safe_mean(lst):
+            return np.mean(lst) if len(lst) > 0 else 0.0
 
         # 构造 Info
         info = {
             "net_worth": float(current_net_worth),
-            "max_drawdown": float(self.max_drawdown),
+            "max_drawdown": float(self.max_drawdown_rec),
             "alpha": float(self.alpha),
             "pos_ratio": float((self.number_of_shares * next_price) / current_net_worth) if current_net_worth > 0 else 0,
-            # 统计均值供 Callback 使用
-            "ave_r_base": np.mean(self.episode_rewards["r_base"]) if self.episode_rewards["r_base"] else 0,
-            "ave_r_risk": np.mean(self.episode_rewards["r_risk"]) if self.episode_rewards["r_risk"] else 0,
+            
+            # 全体均值
+            "ave_r_base": safe_mean(self.episode_rewards["r_base"]),
+            # 盈利时的平均值 (应该 > 0)
+            "ave_r_base_pos": safe_mean(self.episode_rewards["r_base_pos"]),
+            # 亏损时的平均值 (应该 < 0)
+            "ave_r_base_neg": safe_mean(self.episode_rewards["r_base_neg"]),
+            
+            "ave_r_risk": safe_mean(self.episode_rewards["r_risk"]),
         }
 
         # --- 7. 更新历史状态 (Rolling Update) ---
-        # 计算 T 到 T+1 的收益率，推入 history
-        if prev_net_worth == 0: prev_net_worth = 1e-8 # 理论上不应发生
+        if prev_net_worth == 0: prev_net_worth = 1e-8 
         delta_ratio = np.log(next_price / current_price) * INCR_PARA
         
         self.stock_history.pop(0)
         self.stock_history.append(delta_ratio)
 
-        # 返回 (observation, reward, terminated, truncated, info)
         return self._get_observation(), float(total_reward), terminated, False, info
