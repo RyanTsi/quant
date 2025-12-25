@@ -118,7 +118,8 @@ class SingleStockTestEnv(SimpleStockEnv):
         
         self.episode_rewards = {
             "r_base": [], "r_base_pos": [], "r_base_neg": [], 
-            "r_risk": [], "r_cash": []
+            "r_risk": [], "r_cash": [],
+            "r_turnover": []
         }
 
         # --- [关键] 回测参数固定 ---
@@ -263,7 +264,7 @@ if __name__ == "__main__":
     test_end = datetime(2025, 12, 12)
     
     # 1. 加载模型
-    model_path = "./best_model/sac_v2_50000_steps.zip" 
+    model_path = "./best_model/best_model.zip" 
     print(f"📦 Loading Model: {model_path}")
     try:
         model = SAC.load(model_path, device="cuda")
