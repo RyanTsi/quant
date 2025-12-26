@@ -7,7 +7,7 @@ TOKEN = "apiv3_DfumAJrYFgvwzRLausV9rI4_74-JlbekNQRlqf5gFT1wMnE4nc_ObRCNNtqtlynzt
 # --------------------------------
 
 # ------- RL 训练参数配置 -------
-WINDOW_SIZE = 90  # 用于状态表示的窗口大小
+WINDOW_SIZE = 60  # 用于状态表示的窗口大小
 TRAINING_DAYS = 252  # 交易日数量
 ORIGINAL_MONEY = 1000000.0  # 原始资金
 NEW_HIGH_REWARD = 1  # 达到新高奖励

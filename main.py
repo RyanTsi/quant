@@ -47,5 +47,6 @@ import numpy as np
 #     # print(np.log(a) * 4)
 #     print(np.tanh(1))
 
-a = np.log1p(10)
+1.5 ** (1/252) - 1
+a = np.log(1.5 ** (1/252)) * 100
 print(a)
