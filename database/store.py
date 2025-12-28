@@ -57,6 +57,7 @@ if __name__ == '__main__':
     manager = InfluxDBManager(config, InfluxDBCallbacks())
     
     csv_files = glob.glob(os.path.join(DIRECTORY, "*.csv"))
+    # csv_files = [ DIRECTORY + "/index_sh000001.csv"]
     print(f"🔥 启动多进程解析引擎 (Workers: {MAX_WORKERS})...")
     
     pending_buffer = []

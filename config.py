@@ -26,4 +26,5 @@ test_range  = (datetime(2024, 1, 1), datetime(2025, 12, 31))
 MODEL_PATH = "sac_random_stock_model_6.zip"
 TRAIN_LOG_DIR = "./tensorboard_logs/"
 VAL_LOG_DIR = "./tensorboard_logs/val/"
+TOTAL_TIMESTEPS = 3_000_000
 # --------------------------------
