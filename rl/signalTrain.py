@@ -145,7 +145,7 @@ class LSTM_Attention_Extractor(BaseFeaturesExtractor):
         
         # 2. 定义 LSTM 层
         # hidden_size: 隐层维度，越大拟合能力越强，但越难训练
-        hidden_size = 128
+        hidden_size = 64
         self.lstm = nn.LSTM(
             input_size=self.input_features,
             hidden_size=hidden_size,
@@ -157,9 +157,9 @@ class LSTM_Attention_Extractor(BaseFeaturesExtractor):
         # 3. (可选) 简单的注意力机制层
         # 用于计算 LSTM 输出序列中每个时间步的权重
         self.attention = nn.Sequential(
-            nn.Linear(hidden_size, 64),
+            nn.Linear(hidden_size, 32),
             nn.Tanh(),
-            nn.Linear(64, 1),
+            nn.Linear(32, 1),
             nn.Softmax(dim=1)
         )
         
@@ -196,6 +196,8 @@ class LSTM_Attention_Extractor(BaseFeaturesExtractor):
         
         # 3. 最终映射
         return self.linear(context_vector)
+    
+
 # ==========================================
 # 3. 主程序
 # ==========================================
@@ -211,7 +213,7 @@ if __name__ == "__main__":
     manager = InfluxDBManager(config_db, InfluxDBCallbacks())
     
     # 获取股票列表
-    target_date = datetime(2023, 12, 12) # 建议修改为当前临近日期
+    target_date = datetime(2023, 12, 12)
     all_codes = manager.get_stock_code_list_by_date(target_date)
     
     # 确保大盘指数在第一位
@@ -234,7 +236,7 @@ if __name__ == "__main__":
     env_kwargs = {
         'window_size': 60,
         'training_days': 252,
-        'transaction_cost_pct': 0.0010,
+        'transaction_cost_pct': 0.0000,
         'deadzone_level': 0.1,
         'reward_scale': 0.1
     }

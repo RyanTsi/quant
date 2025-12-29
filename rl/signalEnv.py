@@ -31,7 +31,7 @@ class AStockSignalEnv(gym.Env):
         print(f"正在初始化环境 (v4.0)...")
         self.data_list = []      # (N_stocks, T, Features)
         self.target_list = []    # (N_stocks, T)
-        self.tradable_list = []  # (N_stocks, T)
+        self.abs_ret_list = []  # (N_stocks, T)
         
         # list[0] 是大盘指数
         if len(stock_df_list) < 2:
@@ -42,14 +42,14 @@ class AStockSignalEnv(gym.Env):
         # 批量预处理
         print("开始特征工程 (Rolling Window)...")
         for i, df in enumerate(stock_df_list[1:]):
-            feats, targs, tradables = self._preprocess_data(df, index_df)
+            feats, targs, abs_ret = self._preprocess_data(df, index_df)
             
             # 确保数据长度足够
             # 需要: Window + Training Steps + Buffer
             if len(feats) > window_size + training_days + 20:
                 self.data_list.append(feats)
                 self.target_list.append(targs)
-                self.tradable_list.append(tradables)
+                self.abs_ret_list.append(abs_ret)
             
             if i % 10 == 0 and i > 0:
                 print(f"已处理 {i} 只股票...")
@@ -98,69 +98,100 @@ class AStockSignalEnv(gym.Env):
         return self._get_observation(), {}
 
     def step(self, action):
-        # --- A. 获取当前环境信息 ---
-        # 是否可交易 (由预处理计算好的 T 日状态决定)
-        is_tradable = self.tradable_list[self.current_stock_idx][self.day_idx]
+        # -----------------------------------------------------------
+        # A. 解析动作与状态
+        # -----------------------------------------------------------
+        # 1. 截断 Action 到 [-1, 1]
+        signal = float(np.clip(action[0], -1, 1))
         
-        raw_signal = float(np.clip(action[0], -1, 1))
-        
-        # --- B. 动作过滤 (Deadzone & Force Hold) ---
-        if not is_tradable:
-            # 不可交易(涨跌停/停牌): 强制保持上一日信号
-            signal = self.last_signal
-        else:
-            # 只有当信号变化超过死区阈值时，才执行改变
-            if abs(raw_signal - self.last_signal) < self.deadzone_level:
-                signal = self.last_signal
-            else:
-                signal = raw_signal
-        
-        # 计算实际发生的变化量
+        # 2. 计算仓位变化量 (用于计算手续费)
         effective_change = np.abs(signal - self.last_signal)
 
-        # --- C. 计算回报 (Reward) ---
-        # 获取 T+1 日的真实收益 (百分比, 如 1.5 代表 1.5%)
-        current_targets = self.target_list[self.current_stock_idx]
-        
-        # 边界保护
-        if self.day_idx >= len(current_targets) - 1:
+        # -----------------------------------------------------------
+        # B. 获取环境数据 (Ground Truth)
+        # -----------------------------------------------------------
+        # 边界检查
+        current_alpha_targets = self.target_list[self.current_stock_idx]
+        if self.day_idx >= len(current_alpha_targets) - 1:
             return np.zeros(self.observation_space.shape, dtype=np.float32), 0.0, True, False, {}
 
-        actual_next_ret_pct = current_targets[self.day_idx]
+        # [关键区别]
+        # actual_alpha_pct: 超额收益 (Stock - Index)。这是模型要学习的目标。
+        # actual_abs_pct:   绝对收益 (Stock)。这是账户真实的盈亏。
+        actual_alpha_pct = current_alpha_targets[self.day_idx]
+        actual_abs_pct = self.abs_ret_list[self.current_stock_idx][self.day_idx]
         
-        # 1. 投资毛收益 (Gross PnL)
-        gross_ret_pct = signal * actual_next_ret_pct
+        # 反推指数收益 (用于调试: Alpha + Index ~= Abs)
+        # 注意: 由于浮点误差和Log Return计算方式，这里只是近似，但足够调试用
+        actual_index_pct = actual_abs_pct - actual_alpha_pct
+
+        # -----------------------------------------------------------
+        # C. 计算 Reward (指导模型学习的信号)
+        # -----------------------------------------------------------
+        # 1. 原始 Alpha 收益 (Raw Alpha Reward)
+        # 如果 Signal > 0 且 Alpha > 0 (跑赢大盘)，正奖励
+        # 如果 Signal > 0 且 Alpha < 0 (跑输大盘)，负奖励
+        raw_reward = signal * actual_alpha_pct
         
-        # 2. 交易成本 (Transaction Cost)
+        # 2. 交易成本 (Cost)
+        # 建议: 训练初期 transaction_cost_pct 设极低 (如 0 或 1e-5)，让模型先敢于交易
         cost_pct = effective_change * self.transaction_cost_pct * 100
         
-        # 3. 净收益 (Net PnL)
-        net_ret_pct = gross_ret_pct - cost_pct
-        
-        # 4. 缩放 Reward (便于神经网络训练)
-        reward = net_ret_pct * self.reward_scale
-        
-        # --- D. 追踪真实净值 (Portfolio Value) ---
-        # 复利计算
-        self.portfolio_value *= (1 + net_ret_pct / 100.0)
+        # 3. 最终 Reward
+        # 只有扣除成本后还能跑赢大盘，才是好的 Alpha
+        reward = (raw_reward - cost_pct) * self.reward_scale
 
-        # --- E. 状态更新与输出 ---
+        # -----------------------------------------------------------
+        # D. 净值追踪 (Portfolio Value - 真实的钱)
+        # -----------------------------------------------------------
+        # 这里的盈亏必须用 "绝对收益" 算，因为你在实盘里不能只买 Alpha
+        gross_abs_ret = signal * actual_abs_pct
+        net_abs_ret = gross_abs_ret - cost_pct
+        
+        self.portfolio_value *= (1 + net_abs_ret / 100.0)
+
+        # -----------------------------------------------------------
+        # E. 计算调试指标 (Info Engineering)
+        # -----------------------------------------------------------
+        # 1. 胜率判定: 只有当方向正确且产生正向 Alpha 时才算 Win
+        # 避免 0 值噪音，设一个极小阈值
+        is_win = 1.0 if (signal * actual_alpha_pct > 1e-5) else 0.0
+        
+        # 2. 信号置信度 (模型开仓有多重?)
+        confidence = np.abs(signal)
+
+        # -----------------------------------------------------------
+        # F. 状态更新与输出
+        # -----------------------------------------------------------
         self.last_signal = signal
         self.day_idx += 1
         self.steps_taken += 1
         
-        # 检查是否结束
         truncated = self.steps_taken >= self.training_days
-        terminated = False
+        terminated = False # 除非破产，否则不自行终止，让 TimeLimit 处理
         
+        # 这一步一定要保证 preprocess 里的 dropna 是执行过的
         next_obs = self._get_observation()
         
         info = {
-            'signal': signal,
-            'real_ret': actual_next_ret_pct,
-            'cost': cost_pct,
-            'portfolio_value': self.portfolio_value, # 关键监控指标
-            'is_tradable': is_tradable
+            # === 1. 核心表现 (训练监控) ===
+            'Reward': reward,                          # 最终给 RL 的分
+            'Metrics/Raw_Alpha_Ret': raw_reward,       # 未扣费的 Alpha 收益
+            'Metrics/Cost': cost_pct,                  # 手续费损耗
+            
+            # === 2. 归因分析 (最重要 - 区分运气和实力) ===
+            # 如果 Portfolio 涨了，是因为 Alpha (实力) 还是 Index (运气)?
+            'Attribution/Alpha_Ret_Day': actual_alpha_pct, # 当天该股超额收益
+            'Attribution/Index_Ret_Day': actual_index_pct, # 当天大盘收益
+            'Attribution/Abs_Ret_Day': actual_abs_pct,     # 当天个股绝对收益
+            
+            # === 3. 模型行为诊断 ===
+            'Action/Signal': signal,                   # 信号值 (-1 ~ 1)
+            'Action/Confidence': confidence,           # 开仓力度 (0 ~ 1)
+            'Metrics/Win_Rate_Step': is_win,           # 单步胜率 (0 或 1, Tensorboard 会自动算平均)
+            
+            # === 4. 账户状态 ===
+            'State/Portfolio_Value': self.portfolio_value
         }
 
         return next_obs, reward, terminated, truncated, info
@@ -193,7 +224,7 @@ class AStockSignalEnv(gym.Env):
         # log(P_t / P_{t-1}) * 100
         df['Log_Ret'] = np.log(df['收盘'] / df['收盘'].shift(1)) * 100
         df['Index_Log_Ret'] = np.log(df['收盘_Idx'] / df['收盘_Idx'].shift(1)) * 100
-        
+        df['Excess_Ret'] = df['Log_Ret'] - df['Index_Log_Ret']
         # 3. 构建原始特征
         # F1: 相对强度
         df['Rel_Str'] = df['Log_Ret'] - df['Index_Log_Ret']
@@ -224,23 +255,14 @@ class AStockSignalEnv(gym.Env):
             # 截断极端值
             df[col] = df[col].clip(-5, 5)
             
-        # 5. === 流动性状态判定 ===
-        # 判定一字板: High=Low 且 绝对涨跌幅 > 9% (粗略判定)
-        is_limit = (df['最高'] == df['最低']) & (df['Log_Ret'].abs() > 9.0)
-        # 判定停牌: High=Low 且 波动极小
-        is_suspend = (df['最高'] == df['最低']) & (df['Log_Ret'].abs() < 1e-6)
-        
-        # 可交易标记
-        df['Is_Tradable'] = ~(is_limit | is_suspend)
-        
-        # 6. 准备 Target (T+1 收益)
-        df['Next_Ret'] = df['Log_Ret'].shift(-1)
-        
-        # 7. 清洗 NaN (Rolling导致的头部缺失 + Shift导致的尾部缺失)
+        # 5. 准备 Target (T+1 收益)
+        df['Next_Excess_Ret'] = df['Excess_Ret'].shift(-1)
+        df['Next_Abs_Ret'] = df['Log_Ret'].shift(-1)
+        # 6. 清洗 NaN (Rolling导致的头部缺失 + Shift导致的尾部缺失)
         df.dropna(inplace=True)
         
         return (
-            df[feature_cols].values.astype(np.float32), 
-            df['Next_Ret'].values.astype(np.float32), 
-            df['Is_Tradable'].values.astype(bool)
+            df[feature_cols].values.astype(np.float32),
+            df['Next_Excess_Ret'].values.astype(np.float32),
+            df['Next_Abs_Ret'].values.astype(np.float32),
         )
