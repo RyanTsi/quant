@@ -40,12 +40,6 @@ def preprocess_data(df_raw):
             return None
 
     # --- B. 基于名称的显式过滤 (最准确) ---
-    # 如果数据源包含股票名称（如 'name', '股票名称'）
-    name_col = next((col for col in df.columns if col in ['name', '名称', '股票名称']), None)
-    if name_col:
-        # 只要历史上任何一天名字里带 'ST'，直接整只股票丢弃 (黑名单策略)
-        if df[name_col].str.contains('ST', case=False, na=False).any():
-            return None
 
     # --- C. 基于价格行为的隐式过滤 (兜底策略) ---
     # 计算涨跌幅 (绝对值)
@@ -56,8 +50,6 @@ def preprocess_data(df_raw):
     # 逻辑：如果一只股票在全历史中，最大单日波动从未超过 5.1%，
     # 说明它要么是长期 ST，要么是流动性枯竭的死股。
     # 正常主板股票一定会有涨停(10%)的时候。
-    if pct_chg.max() < 5.1: 
-        return None
 
     # C2. 检查“曾经戴帽”特征 (更严格)
     # 逻辑：ST 股的特征是“5%一字板”。
@@ -79,8 +71,8 @@ def preprocess_data(df_raw):
     df = df.reset_index(drop=True)
     
     # 5. 检查长度
-    min_length = WINDOW_SIZE + TRAINING_DAYS + 22
+    min_length = 60 + 252 + 22
     if len(df) < min_length:
         return None
-        
+    print("ok!!")    
     return df

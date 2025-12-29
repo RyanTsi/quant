@@ -1,90 +1,75 @@
-import akshare as ak
+import pickle
 import pandas as pd
-import os
+import numpy as np
 
-def download_aligned_market_index(save_dir="history/past15year_stock_data_daily"):
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
+# 文件路径 (确保和你的脚本在同一目录下，或者写绝对路径)
+FILE_PATH = "train_data_v4.pkl"
 
-    print("正在下载并对齐大盘指数 (上证指数 sh000001)...")
+def inspect_data():
+    print(f"📂 正在加载 {FILE_PATH} ...")
     
     try:
-        # 1. 使用东方财富接口 (字段更全，包含成交额)
-        # symbol="sh000001" 代表上证指数
-        df = ak.stock_zh_index_daily_em(symbol="sh000001")
-        
-        # 2. 筛选时间范围
-        df['date'] = pd.to_datetime(df['date'])
-        start = pd.to_datetime("2010-01-01")
-        end = pd.to_datetime("2025-12-14")
-        df = df[(df['date'] >= start) & (df['date'] <= end)].copy()
-        
-        # 3. 列名映射 (API返回列名 -> 你的标准列名)
-        # EM接口通常返回: date, open, close, high, low, volume, amount
-        rename_dict = {
-            'date': '日期',
-            'open': '开盘',
-            'close': '收盘',
-            'high': '最高',
-            'low': '最低',
-            'volume': '成交量',
-            'amount': '成交额'
-        }
-        df.rename(columns=rename_dict, inplace=True)
-        
-        # 4. 补全缺失列 (计算衍生指标)
-        # 预计算前收盘价 (Pre_Close)
-        pre_close = df['收盘'].shift(1)
-        
-        # 补全: 股票代码
-        df['股票代码'] = 'sh000001'
-        
-        # 补全: 涨跌额 (收盘 - 前收盘)
-        df['涨跌额'] = df['收盘'] - pre_close
-        
-        # 补全: 涨跌幅 ((收盘 - 前收盘) / 前收盘 * 100)
-        df['涨跌幅'] = (df['收盘'] / pre_close - 1) * 100
-        
-        # 补全: 振幅 ((最高 - 最低) / 前收盘 * 100)
-        # 注意: 振幅的分母通常是"前收盘"，第一天会是NaN
-        df['振幅'] = (df['最高'] - df['最低']) / pre_close * 100
-        
-        # 补全: 换手率 (指数无换手率，填0)
-        df['换手率'] = 0.0
-        
-        # 5. 填补计算产生的 NaN (主要是第一天)
-        df.fillna(0, inplace=True)
+        with open(FILE_PATH, "rb") as f:
+            data_list = pickle.load(f)
+    except FileNotFoundError:
+        print(f"❌ 找不到文件: {FILE_PATH}")
+        return
 
-        # 6. === 强制列对齐 ===
-        # 你指定的完整列顺序
-        target_columns = [
-            '日期', '股票代码', '开盘', '收盘', '最高', '最低', 
-            '成交量', '成交额', '振幅', '涨跌幅', '涨跌额', '换手率'
-        ]
+    # 1. 检查整体结构
+    print(f"\n=== 1. 整体结构 ===")
+    print(f"数据类型: {type(data_list)}")
+    print(f"列表长度 (股票数量): {len(data_list)}")
+    
+    if len(data_list) == 0:
+        print("⚠️ 警告: 列表为空！之前的 get_data_with_cache 可能没下载到任何数据。")
+        return
+
+    # 2. 检查大盘指数 (通常是第0个)
+    print(f"\n=== 2. 大盘指数 (Index 0) ===")
+    index_df = data_list[0]
+    analyze_dataframe(index_df, "指数/大盘")
+
+    # 3. 检查第一只个股 (通常是第1个)
+    if len(data_list) > 1:
+        print(f"\n=== 3. 随机个股样本 (Index 1) ===")
+        stock_df = data_list[1]
+        analyze_dataframe(stock_df, "个股样本")
+    else:
+        print("\n⚠️ 警告: 只有指数数据，没有个股数据！")
+
+def analyze_dataframe(df, name):
+    """详细分析单个 DataFrame"""
+    print(f"[{name}] 类型: {type(df)}")
+    
+    if not isinstance(df, pd.DataFrame):
+        print(f"❌ 错误: 数据不是 DataFrame，而是 {type(df)}")
+        return
+
+    print(f"[{name}] 形状 (Rows, Cols): {df.shape}")
+    print(f"[{name}] 列名: {list(df.columns)}")
+    
+    # 检查索引是否为时间
+    is_time_index = isinstance(df.index, pd.DatetimeIndex)
+    print(f"[{name}] Index是否为时间格式: {is_time_index}")
+    
+    if len(df) > 0:
+        start_date = df.index.min()
+        end_date = df.index.max()
+        print(f"[{name}] 时间范围: {start_date} -> {end_date}")
+        print(f"[{name}] ❌ 原始行数: {len(df)}")
         
-        # 检查是否缺少列 (防患于未然)
-        for col in target_columns:
-            if col not in df.columns:
-                print(f"警告: 缺失列 {col}，已自动补0")
-                df[col] = 0
-                
-        # 按指定顺序重排
-        df_final = df[target_columns]
-        
-        # 7. 保存
-        file_path = os.path.join(save_dir, "index_sh000001.csv")
-        df_final.to_csv(file_path, index=False, encoding='utf-8-sig')
-        
-        print(f"✅ 大盘指数处理成功！")
-        print(f"数据路径: {file_path}")
-        print(f"数据形状: {df_final.shape}")
-        print(f"列预览: {df_final.columns.tolist()}")
-        print(f"首行预览:\n{df_final.head(1)}")
-        
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"❌ 下载大盘指数失败: {e}")
+        # 关键诊断：判断是否满足你的环境要求
+        # 你的环境要求：Window(60) + Training(252) + Buffer(20) = 332
+        required = 332
+        if len(df) < required:
+            print(f"⚠️ [关键问题] 行数不足！现有 {len(df)} < 需要 {required}。这会导致被环境丢弃。")
+        else:
+            print(f"✅ [通过] 行数充足 ({len(df)} > {required})。")
+            
+        print(f"[{name}] 头部数据预览:\n{df.head(3)}")
+        print(f"[{name}] 尾部数据预览:\n{df.tail(3)}")
+    else:
+        print(f"⚠️ [关键问题] DataFrame 是空的！")
 
 if __name__ == "__main__":
-    download_aligned_market_index()
+    inspect_data()

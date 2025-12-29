@@ -21,35 +21,55 @@ from database.influx_manager import InfluxDBManager, InfluxDBConfig, InfluxDBCal
 from config import * 
 
 # ==========================================
-# 1. 增强版日志回调 (适配您的 Env Info)
+# 1. 日志回调
 # ==========================================
 class DetailedLogCallback(BaseCallback):
     """
     从 Env 的 info 中提取自定义指标并记录到 TensorBoard
     """
-    def __init__(self, verbose=0):
-        super(DetailedLogCallback, self).__init__(verbose)
-        self.cum_daily_return = 0.0
-
     def _on_step(self) -> bool:
+        # 1. 获取当前 Step 所有环境返回的 info (列表，长度为环境数量)
         infos = self.locals.get('infos', [])
         
+        # 2. 遍历环境 (通常你用 DummyVecEnv 只有一个环境，但为了通用性这里用循环)
         for info in infos:
-            if 'portfolio_value' in info:
-                # 记录核心指标：净值
-                self.logger.record("custom/portfolio_value", info['portfolio_value'])
             
-            if 'cost' in info:
-                # 记录交易成本消耗
-                self.logger.record("custom/transaction_cost", info['cost'])
-            
-            if 'real_ret' in info:
-                # 记录实际产生的收益分布
-                self.logger.record("custom/real_market_return", info['real_ret'])
+            # --- A. 账户状态 (最核心) ---
+            if 'State/Portfolio_Value' in info:
+                # 记录净值曲线
+                self.logger.record("main/Portfolio_Value", info['State/Portfolio_Value'])
 
-            if 'signal' in info:
-                 # 记录Agent输出的平均信号强度
-                self.logger.record("custom/agent_signal", info['signal'])
+            # --- B. 训练监控 (Metrics) ---
+            if 'Metrics/Raw_Alpha_Ret' in info:
+                # 原始 Alpha 收益 (未扣费)
+                self.logger.record("train/Raw_Alpha_Ret", info['Metrics/Raw_Alpha_Ret'])
+            
+            if 'Metrics/Cost' in info:
+                # 交易成本损耗
+                self.logger.record("train/Transaction_Cost", info['Metrics/Cost'])
+                
+            if 'Metrics/Win_Rate_Step' in info:
+                # 胜率 (SB3 会自动计算 dump 间隔内的平均值)
+                self.logger.record("train/Win_Rate", info['Metrics/Win_Rate_Step'])
+
+            # --- C. 归因分析 (Attribution) ---
+            # 这里的目的是看：你的收益到底来自于 Alpha 还是大盘 Beta
+            if 'Attribution/Alpha_Ret_Day' in info:
+                self.logger.record("attribution/Alpha_Ret", info['Attribution/Alpha_Ret_Day'])
+            
+            if 'Attribution/Index_Ret_Day' in info:
+                self.logger.record("attribution/Index_Ret", info['Attribution/Index_Ret_Day'])
+                
+            if 'Attribution/Abs_Ret_Day' in info:
+                self.logger.record("attribution/Abs_Ret", info['Attribution/Abs_Ret_Day'])
+
+            # --- D. 行为诊断 (Behavior) ---
+            # 观察模型是不是只会输出 0，或者疯狂输出 1/-1
+            if 'Action/Signal' in info:
+                self.logger.record("behavior/Signal_Mean", info['Action/Signal'])
+                
+            if 'Action/Confidence' in info:
+                self.logger.record("behavior/Confidence", info['Action/Confidence'])
 
         return True
 
@@ -73,37 +93,18 @@ def get_data_with_cache(manager, codes, start_date, end_date, cache_name):
     
     # 必须保证 index=0 是大盘指数
     # 我们假设 codes[0] 是 sh000001
-    
-    # 先处理大盘指数 (指数不需要经过 ST 过滤，但也需要基础清洗)
-    try:
-        index_df = manager.get_stock_data_by_range(stock_code=codes[0], start_time=start_date, end_time=end_date)
-        # 指数只需要基础清洗（去空、排序）
-        if index_df is not None:
-             # 确保时间排序
-            if 'time' in index_df.columns:
-                index_df['time'] = pd.to_datetime(index_df['time'])
-                index_df = index_df.sort_values('time').set_index('time')
-            elif not isinstance(index_df.index, pd.DatetimeIndex):
-                 pass 
-            
-            # 指数必须保留
-            df_list.append(index_df)
-            print(f"✅ 指数数据已加载: {len(index_df)} 条")
-    except Exception as e:
-        print(f"❌ 指数获取失败: {e}")
-        return [] # 指数挂了就没法练了
 
-    # 处理个股
+    # 处理个股、指数
     valid_count = 0
     skipped_count = 0
     
-    for code in codes[1:]: # 跳过第一个（因为是指数）
+    for code in codes:
         try:
             df_temp = manager.get_stock_data_by_range(stock_code=code, start_time=start_date, end_time=end_date)
             
             # === 调用您的清洗逻辑 ===
             # 注意：这里我们传入了 code，用于前缀判断
-            df_clean = rl.prehandle.preprocess_data(df_temp, stock_code=code)
+            df_clean = rl.prehandle.preprocess_data(df_temp)
             
             if df_clean is not None:
                 df_list.append(df_clean)
@@ -116,7 +117,7 @@ def get_data_with_cache(manager, codes, start_date, end_date, cache_name):
             skipped_count += 1
             
         # 进度打印
-        if (valid_count + skipped_count) % 100 == 0:
+        if (valid_count + skipped_count) % 500 == 0:
             print(f"处理进度: 有效 {valid_count} / 跳过 {skipped_count} ...")
     
     print(f"📊 数据清洗完成: 输入 {len(codes)-1} -> 输出 {valid_count} (剔除率 {skipped_count/(len(codes)-1):.1%})")
@@ -238,7 +239,7 @@ if __name__ == "__main__":
         'training_days': 252,
         'transaction_cost_pct': 0.0000,
         'deadzone_level': 0.1,
-        'reward_scale': 0.1
+        'reward_scale': 1
     }
 
     print("构建训练环境...")
@@ -264,7 +265,7 @@ if __name__ == "__main__":
     
     # 2. 检查点回调
     checkpoint_callback = CheckpointCallback(
-        save_freq=50_000, 
+        save_freq=5_000, 
         save_path='./checkpoints_v4/', 
         name_prefix='sac_v4'
     )

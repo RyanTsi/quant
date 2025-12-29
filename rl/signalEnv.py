@@ -1,6 +1,7 @@
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
+import pandas as pd
 
 # ==========================================
 # 1. 核心环境类: AStockSignalEnv v4.0
@@ -51,7 +52,7 @@ class AStockSignalEnv(gym.Env):
                 self.target_list.append(targs)
                 self.abs_ret_list.append(abs_ret)
             
-            if i % 10 == 0 and i > 0:
+            if i % 500 == 0 and i > 0:
                 print(f"已处理 {i} 只股票...")
                 
         print(f"初始化完成，有效股票数量: {len(self.data_list)}")
@@ -211,12 +212,15 @@ class AStockSignalEnv(gym.Env):
     def _preprocess_data(self, df, index_df):
         """
         严谨的特征工程:
-        1. Inner Join 对齐日期
-        2. Rolling Z-Score 归一化 (防未来函数)
-        3. 识别停牌与一字板
         """
         df = df.copy()
-        
+        if 'time' in df.columns:
+            # 确保转为 datetime 格式
+            df['time'] = pd.to_datetime(df['time'])
+            # 设置为索引
+            df.set_index('time', inplace=True)
+            # 排序（以防万一）
+            df.sort_index(inplace=True)
         # 1. 数据对齐
         df = df.join(index_df[['收盘']], rsuffix='_Idx', how='inner')
         
