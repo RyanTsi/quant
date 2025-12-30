@@ -9,15 +9,10 @@ import pandas as pd
 class AStockSignalEnv(gym.Env):
     """
     A股信号交易环境 v4.0 (Production Ready)
-    特性:
-    - 动态 Rolling Z-Score 归一化 (无未来函数)
-    - 严格的流动性检查 (停牌/一字板无法交易)
-    - 交易死区 (过滤微小震荡)
-    - 真实净值追踪 (Portfolio Value)
     """
     def __init__(self, stock_df_list: list,
                  window_size=60,
-                 training_days=252,
+                 training_days=60,
                  transaction_cost_pct=0.0010,  # 单边万分之10 (含印花税+佣金+滑点)
                  deadzone_level=0.1,           # 10% 仓位变化死区
                  reward_scale=0.1):            # Reward 缩放因子
