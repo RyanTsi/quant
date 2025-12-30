@@ -1,8 +1,11 @@
 import numpy as np
 import pandas as pd
 import talib
+import seaborn as sns
+import matplotlib.pyplot as plt
 from config import *
 
+# key: feat_excess_ret, feat_log_ret_index, feat_rsi_14, feat_macd_hist, feat_vol_ratio, feat_atr_norm, feat_obv_trend
 def preprocess_data(df_raw, df_index_raw):
     """
     清洗股票数据 v3
@@ -126,3 +129,68 @@ def preprocess_data(df_raw, df_index_raw):
     df_final = df_final.replace([np.inf, -np.inf], np.nan).dropna()
     
     return df_final
+
+def analyze_feature_correlation(df, threshold=0.8):
+    """
+    绘制相关性热力图，并打印高相关性特征对。
+    """
+    # 1. 筛选出所有 'feat_' 开头的特征列
+    feature_cols = [col for col in df.columns if col.startswith('feat_')]
+    
+    if not feature_cols:
+        print("未找到 feat_ 开头的特征列！")
+        return
+
+    # 计算相关性矩阵
+    corr_matrix = df[feature_cols].corr()
+
+    # ==========================
+    # A. 绘制热力图 (Visual Check)
+    # ==========================
+    plt.figure(figsize=(14, 12))
+    
+    # 生成上三角掩码 (因为矩阵是对称的，看一半就够了)
+    mask = np.triu(np.ones_like(corr_matrix, dtype=bool))
+    
+    # 绘图
+    sns.heatmap(
+        corr_matrix, 
+        mask=mask, 
+        cmap='coolwarm',  # 冷暖色调：红正相关，蓝负相关
+        vmax=1, vmin=-1, center=0,
+        square=True, 
+        linewidths=.5, 
+        cbar_kws={"shrink": .5},
+        annot=True,       # 显示数值
+        fmt=".2f"         # 保留两位小数
+    )
+    
+    plt.title('LSTM Feature Correlation Matrix', fontsize=16)
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    plt.show()
+
+    # ==========================
+    # B. 自动报警 (Auto Alert)
+    # ==========================
+    print(f"\n[警报] 相关系数绝对值大于 {threshold} 的特征对：")
+    print("-" * 60)
+    
+    # 遍历矩阵的上三角找出高相关性
+    high_corr_pairs = []
+    cols = corr_matrix.columns
+    for i in range(len(cols)):
+        for j in range(i + 1, len(cols)):
+            val = corr_matrix.iloc[i, j]
+            if abs(val) >= threshold:
+                high_corr_pairs.append((cols[i], cols[j], val))
+    
+    if not high_corr_pairs:
+        print("完美！没有发现高度冗余的特征。")
+    else:
+        # 按相关性大小排序打印
+        high_corr_pairs.sort(key=lambda x: abs(x[2]), reverse=True)
+        for f1, f2, val in high_corr_pairs:
+            print(f"{f1} <--> {f2}: {val:.4f}")
+            # 给出简单的剔除建议
+            print(f"   -> 建议: 二者保留其一 (通常保留计算逻辑更简单的那个)")
