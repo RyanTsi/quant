@@ -5,7 +5,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from config import *
 
-# key: feat_excess_ret, feat_log_ret_index, feat_rsi_14, feat_macd_hist, feat_vol_ratio, feat_atr_norm, feat_obv_trend
+# key: feat_excess_ret, feat_log_ret, feat_rsi_14, feat_macd_hist, feat_vol_ratio, feat_atr_norm, feat_obv_trend
 def preprocess_data(df_raw, df_index_raw):
     """
     清洗股票数据 v3
@@ -72,7 +72,7 @@ def preprocess_data(df_raw, df_index_raw):
     # --- C. 波动类 ---
     # 6. ATR (归一化)
     if '最高' in df_merged.columns:
-        df_merged['feat_atr_norm'] = talib.ATR(high, low, close, timeperiod=14) / close
+        df_merged['feat_atr_norm'] = talib.NATR(high, low, close, timeperiod=14)
     else:
         # 如果没有高低价，用滚动波动率代替
         df_merged['feat_atr_norm'] = df_merged['收盘'].pct_change().rolling(14).std()
