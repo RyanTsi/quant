@@ -5,7 +5,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from config import *
 
-# key: feat_excess_ret, feat_log_ret, feat_rsi_14, feat_macd_hist, feat_vol_ratio, feat_atr_norm, feat_obv_trend
+# key: feat_excess_ret, feat_log_ret_index, feat_rsi_14, feat_macd_hist, feat_bias_20, feat_vol_ratio, feat_obv_trend, feat_atr_norm
 def preprocess_data(df_raw, df_index_raw):
     """
     清洗股票数据 v3

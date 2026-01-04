@@ -63,7 +63,7 @@ class DetailedLogCallback(BaseCallback):
 # ==========================================
 # 2. 数据加载工具 (保持不变)
 # ==========================================
-def get_data_with_cache(manager, codes, start_date, end_date, cache_name):
+def get_data_with_cache(manager: InfluxDBManager, codes, start_date, end_date, cache_name):
     """优先从本地 pickle 读取，否则从 InfluxDB 下载并缓存"""
     if os.path.exists(cache_name):
         print(f"📦 发现缓存 {cache_name}，快速加载中...")
