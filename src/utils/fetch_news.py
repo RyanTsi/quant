@@ -273,8 +273,7 @@ class FinancialNewsCrawler:
                     f.write(f"   链接: {news['link']}\n")
                     f.write("\n")
 
-def main():
-    """主函数"""
+def fetch_news():
     crawler = FinancialNewsCrawler()
     
     logger.info("开始爬取中国金融新闻网当天新闻...")
@@ -308,6 +307,3 @@ def main():
         logger.info("没有找到当天的新闻")
     
     return news_list
-
-if __name__ == "__main__":
-    news = main()

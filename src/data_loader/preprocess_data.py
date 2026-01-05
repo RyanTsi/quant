@@ -5,6 +5,14 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from config import *
 
+def raw2features(df_raw_list, df_index_raw):
+    df_res = []
+    for df_raw in df_raw_list:
+        temp = preprocess_data(df_raw, df_index_raw)
+        if temp is not None:
+            df_res.append(temp)
+    return df_res
+
 # key: feat_excess_ret, feat_log_ret_index, feat_rsi_14, feat_macd_hist, feat_bias_20, feat_vol_ratio, feat_obv_trend, feat_atr_norm
 def preprocess_data(df_raw, df_index_raw):
     """
@@ -45,7 +53,6 @@ def preprocess_data(df_raw, df_index_raw):
     # ==========================================
     
     # 准备 Numpy 数组
-    
     close = df_merged['收盘'].values
     high = df_merged['最高'].values if '最高' in df_merged.columns else close
     low = df_merged['最低'].values if '最低' in df_merged.columns else close
@@ -128,7 +135,8 @@ def preprocess_data(df_raw, df_index_raw):
     # df_final = df_merged[df_merged['成交量'] > 0].copy()
     df_final = df_final.replace([np.inf, -np.inf], np.nan).dropna()
     
-    return df_final
+    if len(df_final) < 100: return None
+    else : return df_final
 
 def analyze_feature_correlation(df, threshold=0.8):
     """

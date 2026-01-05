@@ -4,6 +4,8 @@ from datetime import datetime
 HOST = "http://localhost:8181"
 DATABASE = "stock_history_db"
 TOKEN = "apiv3_DfumAJrYFgvwzRLausV9rI4_74-JlbekNQRlqf5gFT1wMnE4nc_ObRCNNtqtlynztO_pokRMII08bIhAbGoEyw"
+BATCH_WRITE_SIZE = 500000
+MAX_WORKERS = 12
 # --------------------------------
 
 # ------- RL 训练参数配置 -------
@@ -16,6 +18,7 @@ val_range   = (datetime(2022, 1, 1), datetime(2023, 12, 31))
 test_range  = (datetime(2024, 1, 1), datetime(2025, 12, 31))
 
 # ---------- 路径配置 ----------
+RAW_DATA_PATH = "./data/raw"
 MODEL_PATH = "sac_random_stock_model_6.zip"
 TRAIN_LOG_DIR = "./tensorboard_logs/"
 VAL_LOG_DIR = "./tensorboard_logs/val/"

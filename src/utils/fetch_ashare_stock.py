@@ -291,8 +291,7 @@ class AShareStockCrawler:
             logger.error(f"爬取URL失败 {url}: {e}")
             return []
 
-def main():
-    """主函数"""
+def fetch_ashare_stock():
     crawler = AShareStockCrawler()
     
     print("开始爬取A股上市公司数据...")
@@ -325,6 +324,3 @@ def main():
     
     else:
         print("没有获取到数据")
-
-if __name__ == "__main__":
-    main()
