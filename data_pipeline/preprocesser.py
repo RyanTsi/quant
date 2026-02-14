@@ -1,133 +1,181 @@
 import numpy as np
 import pandas as pd
-import akshare as ak
-import talib
+import talib as ta
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 class Preprocesser:
-    def __init__(self, raw_df, index_symbol):
+    def __init__(self, raw_df):
         self.raw_df = raw_df
-        self.index_symbol = index_symbol
         self.tar_df = None
-
-    def _is_main_board(self, df):
-        if 'symbol' not in df.columns or len(df) == 0:
-            return False
-        symbol_str = str(df['symbol'].iloc[0])
-        valid_prefixes = ('600','601','603','000','002')
-        exclude_prefixes = ('688','300','8','4')
-        if symbol_str.startswith(exclude_prefixes):
-            return False
-        return symbol_str.startswith(valid_prefixes)
-
-    def _filter_clean(self, df):
-        df = df[df['close'] > 0].dropna(subset=['close'])
-        df = df[df['volume'] > 0]
-        if 'high' in df.columns and 'low' in df.columns and 'pct_chg' in df.columns:
-            is_limit_lock = (df['high'] == df['low'])
-            is_st_range = (df['pct_chg'] > 4.9) & (df['pct_chg'] < 5.1)
-            if (is_limit_lock & is_st_range).any():
-                return None
-        df = df.reset_index(drop=True)
-        min_length = 60 + 252 + 22
-        if len(df) < min_length:
-            return None
-        return df
-
-    def _merge_index(self, df, idx_df):
-        m = pd.merge(df, idx_df, on='date', how='left')
-        m['index_close'] = m['index_close'].ffill()
-        return m
-
-    def _ema(self, series, span):
-        return series.ewm(span=span, adjust=False).mean()
-
-    def _compute_features(self, df):
-        df = df.copy()
-        df['date'] = pd.to_datetime(df['date'])
-        df = df.sort_values('date').reset_index(drop=True)
-        close = df['close']
-        high = df['high'] if 'high' in df.columns else close
-        low = df['low'] if 'low' in df.columns else close
-        volume = df['volume'].astype(float)
-        df['log_ret'] = np.log(close / close.shift(1))
-        if 'index_close' in df.columns:
-            df['log_ret_index'] = np.log(df['index_close'] / df['index_close'].shift(1))
-            df['excess_ret'] = df['log_ret'] - df['log_ret_index']
-        else:
-            df['log_ret_index'] = 0.0
-            df['excess_ret'] = df['log_ret']
-        for window in [5,20,60]:
-            ma = close.rolling(window).mean()
-            df[f'bias_{window}'] = (close / (ma + 1e-8)) - 1.0
-            if 'index_close' in df.columns:
-                idx_ma = df['index_close'].rolling(window).mean()
-                df[f'idx_bias_{window}'] = (df['index_close'] / (idx_ma + 1e-8)) - 1.0
-            else:
-                df[f'idx_bias_{window}'] = 0.0
-        ema12 = self._ema(close, 12)
-        ema26 = self._ema(close, 26)
-        macd_line = ema12 - ema26
-        signal = self._ema(macd_line, 9)
-        hist = macd_line - signal
-        df['macd_hist'] = hist / (close + 1e-8)
-        prev_close = close.shift(1).fillna(close)
-        tr1 = (high - low).abs()
-        tr2 = (high - prev_close).abs()
-        tr3 = (low - prev_close).abs()
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        atr = tr.rolling(14).mean()
-        df['atr_norm'] = atr / (close + 1e-8)
-        ma20 = close.rolling(20).mean()
-        std20 = close.rolling(20).std()
-        upper = ma20 + 2 * std20
-        lower = ma20 - 2 * std20
-        width = (upper - lower)
-        df['bb_pos'] = np.where(width == 0, 0, (close - lower) / (width + 1e-8))
-        sign_change = np.sign(close.diff().fillna(0.0))
-        obv = (sign_change * volume).cumsum()
-        obv_change = obv.diff(20)
-        vol_sum = volume.rolling(20).sum()
-        df['obv_trend'] = obv_change / (vol_sum + 1e-8)
-        vol_ma20 = volume.rolling(20).mean()
-        df['vol_ratio'] = volume / (vol_ma20 + 1e-8)
-        df['diff_days'] = df['date'].diff().dt.days.fillna(1.0)
-        df['log_time_gap'] = np.log1p(df['diff_days'])
-        df['vol_20'] = df['log_ret'].rolling(20).std()
-        try:
-            indexer = pd.api.indexers.FixedForwardWindowIndexer(window_size=5)
-            df['label_1d'] = df['log_ret'].shift(-1)
-            df['label_5d'] = np.log(close.shift(-1).rolling(window=indexer).mean() / close)
-            df['label_vol'] = df['label_1d'].rolling(window=indexer).std()
-        except Exception:
-            df['label_1d'] = df['log_ret'].shift(-1)
-            df['label_5d'] = df['log_ret'].rolling(5).mean().shift(-4)
-            df['label_vol'] = df['label_1d'].rolling(5).std().shift(-4)
-        df_final = df[df['volume'] > 0].copy()
-        df_final = df_final.replace([np.inf, -np.inf], np.nan).dropna()
-        if len(df_final) < 100:
-            return None
-        return df_final
-
-    def process(self):
-        df = self._rename_stock_columns(self.raw_df.copy())
-        if 'date' in df.columns:
-            df['date'] = pd.to_datetime(df['date'])
-            df = df.sort_values('date').reset_index(drop=True)
-        for col in self.schema:
-            if col not in df.columns:
-                df[col] = None
-        df = df[self.schema]
-        if not self._is_main_board(df):
-            self.tar_df = None
-            return None
-        df = self._filter_clean(df)
-        if df is None:
-            self.tar_df = None
-            return None
-        idx_df = self._load_index_df(self.index_symbol)
-        if idx_df is not None:
-            df = self._merge_index(df, idx_df)
-        res = self._compute_features(df)
-        self.tar_df = res
-        return res
+        self.not_feat = ['date', 'symbol', 'open', 'high', 'low', 'close', 'volume']
     
+    def _clean_data(self):
+        self.raw_df = self.raw_df[(self.raw_df['volume'] > 0) & (self.raw_df['close'] > 0)]
+
+    def run(self):
+        self._clean_data()
+        processed_dfs = []
+        for symbol, group_df in self.raw_df.groupby('symbol'):
+            df_with_features = self._generate_features(group_df) 
+            processed_dfs.append(df_with_features)
+        self.tar_df = pd.concat(processed_dfs, axis=0)
+        feature_cols = [c for c in self.tar_df.columns if c not in self.not_feat]
+        def cs_zscore(x):
+            return (x - x.mean()) / (x.std() + 1e-8)
+        self.tar_df[feature_cols] = self.tar_df.groupby('date')[feature_cols].transform(cs_zscore)
+        self.tar_df[feature_cols] = self.tar_df[feature_cols].clip(-3.0, 3.0)
+        self.tar_df.dropna(inplace=True)
+        self.tar_df.reset_index(drop=True, inplace=True)
+
+    def _generate_features(self, df):
+        """
+        基于 OHLCV 生成高质量、去量纲、平稳化的深度学习特征
+        """
+        o = df['open'].astype('float64').values
+        h = df['high'].astype('float64').values
+        l = df['low'].astype('float64').values
+        c = df['close'].astype('float64').values
+        v = df['volume'].astype('float64').values
+        
+        window_array = [5, 21, 55]
+
+        features = {}
+
+        # ==========================================
+        # 1. 基础对数收益率 (Log Returns)
+        # ==========================================
+        for n in [1, 5, 13]:
+            shifted_c = df['close'].shift(n).values
+            future_c = df['close'].shift(-n).values
+            features[f'LOG_RET_{n}'] = np.log(c / (shifted_c))
+            features[f'TARGET_LOG_RET_{n}'] = np.log(future_c / c)
+
+        # ==========================================
+        # 2. 动量与震荡 (Momentum)
+        # ==========================================
+        for n in window_array:
+            # RSI 相对强弱（0~1）
+            features[f'RSI_{n}'] = ta.RSI(c, timeperiod=n) / 100
+
+        # ==========================================
+        # 3. 均线偏离度 (Trend Deviation / BIAS)  
+        # ==========================================
+        for n in window_array:
+            sma = ta.SMA(c, timeperiod=n)
+            features[f'BIAS_{n}'] = (c - sma) / (sma + 1e-8)
+            
+        # MACD 相对化
+        macd, macdsignal, macdhist = ta.MACD(c, fastperiod=12, slowperiod=26, signalperiod=9)
+        features['MACD_NORM'] = macd / (c + 1e-8)
+        features['MACD_HIST_NORM'] = macdhist / (c + 1e-8)
+
+        # ==========================================
+        # 4. 波动率 (Volatility) 
+        # ==========================================
+        for n in window_array:
+            features[f'NATR_{n}'] = ta.NATR(h, l, c, timeperiod=n) / 100.0
+            
+        # 布林带相关
+        upper, middle, lower = ta.BBANDS(c, timeperiod=20, nbdevup=2, nbdevdn=2, matype=0)
+        features['BOLL_POSITION'] = (c - lower) / (upper - lower + 1e-8) # 价格在布林带内的相对位置 (0~1)
+        features['BOLL_WIDTH'] = (upper - lower) / (middle + 1e-8)       # 布林带开口宽度 (波动率)
+        
+        # ==========================================
+        # 5. 量价动态 (Volume Dynamics) 
+        # ==========================================
+        # 成交量比率 (今天成交量 / 过去5天平均成交量)
+        v_ma5 = ta.SMA(v, timeperiod=5)
+        features['VOL_RATIO_5'] = v / (v_ma5 + 1e-8)
+        
+        # OBV 变动率 (能量潮的 5 日 ROC)
+        obv = ta.OBV(c, v)
+        features['OBV_ROC_5'] = ta.ROCP(obv, timeperiod=5)
+
+
+        # ==========================================
+        # 6. K 线形态综合信号 (K-Line Reversal Signal)
+        # ==========================================
+        range_hl = h - l + 1e-8 
+        # 1. 实体比例 (Body Ratio): 范围 [-1, 1]。
+        features['K_BODY_RATIO'] = (c - o) / range_hl
+        # 2. 上影线比例 (Upper Shadow Ratio): 范围 [0, 1]。
+        features['K_UP_SHADOW_RATIO'] = (h - np.maximum(o, c)) / range_hl
+        # 3. 下影线比例 (Lower Shadow Ratio): 范围 [0, 1]。
+        features['K_LOW_SHADOW_RATIO'] = (np.minimum(o, c) - l) / range_hl
+
+        feature_df = pd.DataFrame(features, index=df.index)
+        result_df = pd.concat([df, feature_df], axis=1)
+
+        result_df.replace([np.inf, -np.inf], np.nan, inplace=True)
+        return result_df.dropna().reset_index(drop=True)
+
+
+    def analyze_feature_correlation(self, df, threshold=0.8):
+        """
+        绘制相关性热力图，并打印高相关性特征对。
+        """
+        # 1. 筛选出所有的特征列
+        cols_to_drop = ['date','symbol','open', 'close', 'high', 'low', 'volume']
+        feature_cols = [c for c in df.columns if c not in cols_to_drop]
+
+        print(feature_cols)
+
+        if not feature_cols:
+            print("未找到 feat_ 开头的特征列！")
+            return
+
+        # 计算相关性矩阵
+        corr_matrix = df[feature_cols].corr()
+
+        # ==========================
+        # A. 绘制热力图 (Visual Check)
+        # ==========================
+        plt.figure(figsize=(14, 12))
+        
+        # 生成上三角掩码 (因为矩阵是对称的，看一半就够了)
+        mask = np.triu(np.ones_like(corr_matrix, dtype=bool))
+        
+        # 绘图
+        sns.heatmap(
+            corr_matrix, 
+            mask=mask, 
+            cmap='coolwarm',  # 冷暖色调：红正相关，蓝负相关
+            vmax=1, vmin=-1, center=0,
+            square=True, 
+            linewidths=.5, 
+            cbar_kws={"shrink": .5},
+            annot=True,       # 显示数值
+            fmt=".2f"         # 保留两位小数
+        )
+        
+        plt.title('LSTM Feature Correlation Matrix', fontsize=16)
+        plt.xticks(rotation=45, ha='right')
+        plt.tight_layout()
+        plt.show()
+
+        # ==========================
+        # B. 自动报警 (Auto Alert)
+        # ==========================
+        print(f"\n[警报] 相关系数绝对值大于 {threshold} 的特征对：")
+        print("-" * 60)
+        
+        # 遍历矩阵的上三角找出高相关性
+        high_corr_pairs = []
+        cols = corr_matrix.columns
+        for i in range(len(cols)):
+            for j in range(i + 1, len(cols)):
+                val = corr_matrix.iloc[i, j]
+                if abs(val) >= threshold:
+                    high_corr_pairs.append((cols[i], cols[j], val))
+        
+        if not high_corr_pairs:
+            print("完美！没有发现高度冗余的特征。")
+        else:
+            # 按相关性大小排序打印
+            high_corr_pairs.sort(key=lambda x: abs(x[2]), reverse=True)
+            for f1, f2, val in high_corr_pairs:
+                print(f"{f1} <--> {f2}: {val:.4f}")
+                # 给出简单的剔除建议
+                print(f"   -> 建议: 二者保留其一 (通常保留计算逻辑更简单的那个)")
+

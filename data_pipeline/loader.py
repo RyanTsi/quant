@@ -32,8 +32,18 @@ class DataLoader:
     @retry(max_retries=3, delay=2)
     def fetch_current_stock_spot_df(self):
         df = ak.stock_zh_a_spot_em()
+        df = self._filter_current_stock_spot_df(df)
         return df
     
+    def _filter_current_stock_spot_df(self, df):
+        if df is None: return None
+        df['最新价'] = pd.to_numeric(df['最新价'], errors='coerce')
+        df = df.dropna(subset=['最新价'])
+        mask_not_st = ~df['名称'].str.contains('ST', na=False, case=False)
+        mask_main_board = df['代码'].str.startswith(('00', '60'), na=False)
+        filtered_df = df[mask_not_st & mask_main_board].copy()
+        return filtered_df.reset_index(drop=True)
+
     @retry(max_retries=3, delay=2)
     def fetch_current_index_spot_df(self):
         df = ak.stock_zh_index_spot_em()
@@ -64,10 +74,12 @@ class DataLoader:
 
         for i, symbol in enumerate(df['代码']):
             if i % 100 == 0: print(f"进度: {i}/{total} ...")
+            
+            file_path = os.path.join(full_dir_path, f'{symbol}.csv')
+            if os.path.exists(file_path): continue
             history_df = self.fetch_stock_history_by_symbol(symbol, start_date, end_date)
             time.sleep(2)
             if history_df is not None and not history_df.empty:
-                file_path = os.path.join(full_dir_path, f'{symbol}.csv')
                 history_df.to_csv(file_path, index=False)
             else:
                 print(f'{symbol} skipped (no data)')
