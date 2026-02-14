@@ -102,5 +102,5 @@ class DataLoader:
     def get_df_from_csv(self, csv_file):
         file_path = os.path.join(self.data_path, csv_file)
         if not os.path.exists(file_path): return None
-        df = pd.read_csv(file_path)
+        df = pd.read_csv(file_path, dtype={'symbol': str})
         return df
