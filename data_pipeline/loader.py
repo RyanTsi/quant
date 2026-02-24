@@ -40,8 +40,8 @@ class DataLoader:
         df['最新价'] = pd.to_numeric(df['最新价'], errors='coerce')
         df = df.dropna(subset=['最新价'])
         mask_not_st = ~df['名称'].str.contains('ST', na=False, case=False)
-        mask_main_board = df['代码'].str.startswith(('00', '60'), na=False)
-        filtered_df = df[mask_not_st & mask_main_board].copy()
+        # mask_main_board = df['代码'].str.startswith(('00', '60'), na=False)
+        filtered_df = df[mask_not_st].copy()
         return filtered_df.reset_index(drop=True)
 
     @retry(max_retries=3, delay=2)
@@ -74,15 +74,15 @@ class DataLoader:
 
         for i, symbol in enumerate(df['代码']):
             if i % 100 == 0: print(f"进度: {i}/{total} ...")
-            
-            file_path = os.path.join(full_dir_path, f'{symbol}.csv')
+            symbol_with_market = self.format_stock_code(symbol)
+            file_path = os.path.join(full_dir_path, f'{symbol_with_market}.csv')
             if os.path.exists(file_path): continue
             history_df = self.fetch_stock_history_by_symbol(symbol, start_date, end_date)
             time.sleep(2)
             if history_df is not None and not history_df.empty:
                 history_df.to_csv(file_path, index=False)
             else:
-                print(f'{symbol} skipped (no data)')
+                print(f'{symbol_with_market} skipped (no data)')
 
     def rename_and_clean_df_columns(self, df):
         if df is None: return None
@@ -94,10 +94,30 @@ class DataLoader:
             '最高': 'high',
             '最低': 'low',
             '成交量': 'volume',
+            '复权因子': 'factor',
         }
         df = df.rename(columns=rename_map)
+        if 'factor' in df.columns:
+            df['factor'] = 1.0
         target_columns = [col for col in rename_map.values() if col in df.columns]
         return df[target_columns]
+
+    def format_stock_code(self, code, prefix: bool = True, uppercase: bool = True):
+        code = str(code).zfill(6)
+        if code.startswith(('00', '30')):
+            market = 'sz'
+        elif code.startswith(('60', '68')):
+            market = 'sh'
+        elif code.startswith(('82', '83', '87', '88', '92')):
+            market = 'bj'
+        else:
+            return code
+        market = market.upper() if uppercase else market
+        if prefix:
+            formatted_code = f"{market}{code}"
+        else:
+            formatted_code = f"{code}.{market}"
+        return formatted_code
 
     def get_df_from_csv(self, csv_file):
         file_path = os.path.join(self.data_path, csv_file)

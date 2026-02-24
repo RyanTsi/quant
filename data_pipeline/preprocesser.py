@@ -8,7 +8,7 @@ class Preprocesser:
     def __init__(self, raw_df):
         self.raw_df = raw_df
         self.tar_df = None
-        self.not_feat = ['date', 'symbol', 'open', 'high', 'low', 'close', 'volume']
+        self.not_feat = ['date', 'symbol', 'open', 'high', 'low', 'close', 'volume', 'factor']
     
     def _clean_data(self):
         self.raw_df = self.raw_df[(self.raw_df['volume'] > 0) & (self.raw_df['close'] > 0)]
