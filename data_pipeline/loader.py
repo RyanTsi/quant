@@ -26,6 +26,8 @@ def retry(max_retries=3, delay=2):
 class DataLoader:
     def __init__(self, data_path):
         self.data_path = data_path
+        self.stock_code_list = os.path.join(self.data_path, 'stock_code_list')
+        self.index_code_list = os.path.join(self.data_path, 'index_code_list')
         self.period = 'daily'
         self.adjust = 'hfq'
 
@@ -66,9 +68,11 @@ class DataLoader:
     def fetch_all_stock_history(self, start_date: str, end_date: str):
         full_dir_path = os.path.join(self.data_path, f'{start_date}-{end_date}')
         os.makedirs(full_dir_path, exist_ok=True)
-        df = self.fetch_current_stock_spot_df()
-        if df is None: return
-
+        if not os.path.exists(self.stock_code_list):
+            stock_code_list = 
+        else:
+            df = self.fetch_current_stock_spot_df()
+            if df is None: return
         total = len(df)
         print(f"获取成功，共 {total} 只股票。")
 

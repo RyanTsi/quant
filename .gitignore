@@ -1,7 +1,6 @@
-stock_data.xlsx
 history
 code_dict
-data
+.data
 news_data
 stock_data
 __pycache__
