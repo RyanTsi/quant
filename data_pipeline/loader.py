@@ -4,6 +4,9 @@ import pandas as pd
 import time
 import os
 
+import requests
+import utils.io
+
 def retry(max_retries=3, delay=2):
     def decorator(func):
         @functools.wraps(func)
@@ -26,8 +29,8 @@ def retry(max_retries=3, delay=2):
 class DataLoader:
     def __init__(self, data_path):
         self.data_path = data_path
-        self.stock_code_list = os.path.join(self.data_path, 'stock_code_list')
-        self.index_code_list = os.path.join(self.data_path, 'index_code_list')
+        self.stock_code_list_path = os.path.join(self.data_path, 'stock_code_list')
+        self.index_code_list_path = os.path.join(self.data_path, 'index_code_list')
         self.period = 'daily'
         self.adjust = 'hfq'
 
@@ -68,25 +71,29 @@ class DataLoader:
     def fetch_all_stock_history(self, start_date: str, end_date: str):
         full_dir_path = os.path.join(self.data_path, f'{start_date}-{end_date}')
         os.makedirs(full_dir_path, exist_ok=True)
-        if not os.path.exists(self.stock_code_list):
-            stock_code_list = 
+        if os.path.exists(self.stock_code_list_path):
+            stock_code_list = utils.io.read_file_lines(self.stock_code_list_path)
         else:
+            print("fetch stock code list online...")
             df = self.fetch_current_stock_spot_df()
             if df is None: return
-        total = len(df)
+            stock_code_list = df['代码']
+        for i in range(len(stock_code_list)):
+            stock_code_list[i] = self.format_stock_code(stock_code_list[i])
+        total = len(stock_code_list)
         print(f"获取成功，共 {total} 只股票。")
 
-        for i, symbol in enumerate(df['代码']):
+        for i, symbol in enumerate(stock_code_list):
             if i % 100 == 0: print(f"进度: {i}/{total} ...")
-            symbol_with_market = self.format_stock_code(symbol)
-            file_path = os.path.join(full_dir_path, f'{symbol_with_market}.csv')
+            file_path = os.path.join(full_dir_path, f'{symbol}.csv')
+            symbol_without_matket = "".join(c for c in symbol if c.isdigit())
             if os.path.exists(file_path): continue
-            history_df = self.fetch_stock_history_by_symbol(symbol, start_date, end_date)
+            history_df = self.fetch_stock_history_by_symbol(symbol_without_matket, start_date, end_date)
             time.sleep(2)
             if history_df is not None and not history_df.empty:
                 history_df.to_csv(file_path, index=False)
             else:
-                print(f'{symbol_with_market} skipped (no data)')
+                print(f'{symbol} skipped (no data)')
 
     def rename_and_clean_df_columns(self, df):
         if df is None: return None
