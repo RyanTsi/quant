@@ -1,49 +1,40 @@
 import os
 import pandas as pd
 import yaml
-import utils.io
-from data_pipeline.loader import DataLoader
 import time
 import requests
+import tushare as ts
+import utils.io
 
-# index_code_list = utils.io.read_file_lines('C:/Users/sola/Documents/quant/.data/index_code_list')
-# with open('config/settings.yaml', 'r', encoding='utf-8') as f:
-#     config = yaml.load(f, Loader=yaml.SafeLoader)
-# data_loader = DataLoader(config['data_path'])
-# for symbol in index_code_list:
-#     symbol = symbol.lower()
-#     # print(symbol)
-#     df = data_loader.fetch_index_history_by_symbol(symbol)
-#     df['factor'] = 1.0
-#     path = os.path.join(config['data_path'], 'cn_index')
-#     os.makedirs(path, exist_ok=True)
-#     if df is not None and not df.empty:
-#         df.to_csv(os.path.join(path, f'{symbol}.csv'), index=False)
-os.environ["http_proxy"] = ""
-os.environ["https_proxy"] = ""
-os.environ["HTTP_PROXY"] = ""
-os.environ["HTTPS_PROXY"] = ""
-os.environ["all_proxy"] = ""
-os.environ["ALL_PROXY"] = ""
+token = ''
+ts.set_token(token)
+pro = ts.pro_api()
 
-_original_request = requests.Session.request
+def main():
+    with open('config/settings.yaml', 'r', encoding='utf-8') as f:
+        config = yaml.load(f, Loader=yaml.SafeLoader)
+    data_path = config['data_path']
+    stock_code_list = utils.io.read_file_lines(os.path.join(data_path, 'stock_code_list'))
 
-def _patched_request(self, method, url, **kwargs):
-    # 拦截请求，强行塞入真实的浏览器 Headers
-    headers = kwargs.get("headers", {})
-    headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-        "Connection": "keep-alive"
-    })
-    kwargs["headers"] = headers
-    # 调用原生的发包方法，把伪装后的请求发出去
-    return _original_request(self, method, url, **kwargs)
+    start_date_list = ['20100101', '20140101']
+    end_date_list = ['20131231','20260227']
+    for stock_code in stock_code_list:
+        dir_name = f'{start_date_list[0]}-{end_date_list[-1]}'
+        stock_code = stock_code[2:] + '.' + stock_code[:2]
+        file_path = os.path.join(data_path, dir_name, f'{stock_code}.csv')
+        if os.path.exists(file_path):
+            continue
+        print(f'Fetching history for {stock_code}...')
+        os.makedirs(os.path.join(data_path, dir_name), exist_ok=True)
+        df_all = pd.DataFrame()
+        for start_date, end_date in zip(start_date_list, end_date_list):
+            df = pro.daily(ts_code=stock_code, start_date=start_date, end_date=end_date)
+            time.sleep(1.5)
+            if df is None or df.empty:
+                continue
+            df_all = pd.concat([df_all, df], ignore_index=True)
+        df_all.sort_values(by='trade_date', inplace=True)
+        df_all.to_csv(os.path.join(data_path, dir_name, f'{stock_code}.csv'), index=False)
 
-# 狸猫换太子：用我们的伪装方法替换系统的原生方法
-requests.Session.request = _patched_request
-import akshare as ak
-time.sleep(2)
-df = ak.stock_zh_a_hist('000001', period='daily', start_date='20200101', end_date='20231231', adjust='hfq')
-print(df)
+if __name__ == '__main__':
+    main()
