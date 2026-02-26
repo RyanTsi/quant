@@ -4,7 +4,6 @@ import pandas as pd
 import time
 import os
 
-import requests
 import utils.io
 
 def retry(max_retries=3, delay=2):
@@ -56,15 +55,24 @@ class DataLoader:
 
     @retry(max_retries=3, delay=2)
     def fetch_stock_history_by_symbol(self, symbol: str, start_date: str, end_date: str):
-        df = ak.stock_zh_a_hist(symbol, period=self.period, start_date=start_date, end_date=end_date, adjust=self.adjust)
+        pure_symbol = self.pure_stock_code(symbol)
+        try:
+            df = ak.stock_zh_a_hist(pure_symbol, period=self.period, start_date=start_date, end_date=end_date, adjust=self.adjust)
+        except Exception as e:
+            symbol = symbol.lower()
+            df = ak.stock_zh_a_daily(symbol, start_date=start_date, end_date=end_date, adjust=self.adjust)
+            df['volume'] /= 100.0
         target_df = self.rename_and_clean_df_columns(df)
         return target_df
     
     @retry(max_retries=3, delay=2)
     def fetch_index_history_by_symbol(self, symbol: str):
-        df = ak.stock_zh_index_daily(symbol)
-        if df is None or df.empty: return None
-        df['symbol'] = symbol
+        symbol = symbol.lower()
+        try:
+            df = ak.stock_zh_index_daily_em(symbol)
+            if df is None or df.empty: return None
+        except Exception as e:
+            df = ak.stock_zh_index_daily(symbol)
         target_df = self.rename_and_clean_df_columns(df)
         return target_df
     
@@ -86,9 +94,31 @@ class DataLoader:
         for i, symbol in enumerate(stock_code_list):
             if i % 100 == 0: print(f"进度: {i}/{total} ...")
             file_path = os.path.join(full_dir_path, f'{symbol}.csv')
-            symbol_without_matket = "".join(c for c in symbol if c.isdigit())
             if os.path.exists(file_path): continue
-            history_df = self.fetch_stock_history_by_symbol(symbol_without_matket, start_date, end_date)
+            history_df = self.fetch_stock_history_by_symbol(symbol, start_date, end_date)
+            time.sleep(2)
+            if history_df is not None and not history_df.empty:
+                history_df.to_csv(file_path, index=False)
+            else:
+                print(f'{symbol} skipped (no data)')
+
+    def fetch_all_index_history(self):
+        if os.path.exists(self.index_code_list_path):
+            index_code_list = utils.io.read_file_lines(self.index_code_list_path)
+        else:
+            print("fetch index code list online...")
+            df = self.fetch_current_index_spot_df()
+            if df is None: return
+            index_code_list = df['代码']
+        total = len(index_code_list)
+        print(f"获取成功，共 {total} 只指数。")
+
+        for i, symbol in enumerate(index_code_list):
+            symbol = symbol.lower()
+            if i % 20 == 0: print(f"进度: {i}/{total} ...")
+            file_path = os.path.join(self.data_path, 'cn_index', f'{symbol}.csv')
+            if os.path.exists(file_path): continue
+            history_df = self.fetch_index_history_by_symbol(symbol)
             time.sleep(2)
             if history_df is not None and not history_df.empty:
                 history_df.to_csv(file_path, index=False)
@@ -99,7 +129,6 @@ class DataLoader:
         if df is None: return None
         rename_map = {
             '日期': 'date',
-            '股票代码': 'symbol',
             '开盘': 'open',
             '收盘': 'close',
             '最高': 'high',
@@ -108,7 +137,7 @@ class DataLoader:
             '复权因子': 'factor',
         }
         df = df.rename(columns=rename_map)
-        if 'factor' in df.columns:
+        if 'factor' not in df.columns:
             df['factor'] = 1.0
         target_columns = [col for col in rename_map.values() if col in df.columns]
         return df[target_columns]
@@ -129,6 +158,9 @@ class DataLoader:
         else:
             formatted_code = f"{code}.{market}"
         return formatted_code
+
+    def pure_stock_code(self, code):
+        return "".join(c for c in code if c.isdigit())
 
     def get_df_from_csv(self, csv_file):
         file_path = os.path.join(self.data_path, csv_file)
