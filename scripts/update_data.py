@@ -3,7 +3,7 @@ import yaml
 import random
 import json
 import os
-from data_pipeline.loader import DataLoader
+from data_pipeline.fetcher import DataLoader
 from data_pipeline.preprocesser import Preprocesser
 import utils.io
 

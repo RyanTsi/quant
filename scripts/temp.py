@@ -5,8 +5,11 @@ import time
 import requests
 import tushare as ts
 import utils.io
+import dotenv
 
-token = ''
+dotenv.load_dotenv('.env')
+token = os.getenv('token')
+
 ts.set_token(token)
 pro = ts.pro_api()
 

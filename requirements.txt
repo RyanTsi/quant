@@ -4,6 +4,7 @@
 
 pyqlib==0.9.7
 akshare==1.18.24
+tushare==1.4.24
 TA-Lib==0.6.8
 
 gymnasium==1.2.3
