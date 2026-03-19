@@ -1,12 +1,12 @@
 import functools
 import akshare as ak
-import tushare as ts
 import pandas as pd
 import time
 import os
 import utils.io
 import utils.format
 from config.settings import settings
+import baostock as bs
 
 def retry(max_retries=3, delay=2):
     def decorator(func):
@@ -24,17 +24,23 @@ def retry(max_retries=3, delay=2):
     return decorator
 
 
-class DataFetcher:
+class StockDataFetcher:
     def __init__(self):
         self.data_path = settings.data_path
-        ts.set_token(settings.tu_token)
-        self.pro = ts.pro_api()
         stock_code_list_path = os.path.join(self.data_path, 'stock_code_list')
         index_code_list_path = os.path.join(self.data_path, 'index_code_list')
-        self.stock_code_list = utils.io.read_file_lines(stock_code_list_path) if os.path.exists(stock_code_list_path) else None
-        self.index_code_list = utils.io.read_file_lines(index_code_list_path) if os.path.exists(index_code_list_path) else None
+        csi500_code_list_path = os.path.join(self.data_path, 'csi500_code_list')
+        self.stock_code_list = utils.io.read_file_lines(stock_code_list_path)
+        self.index_code_list = utils.io.read_file_lines(index_code_list_path)
+        self.csi500_code_list = utils.io.read_file_lines(csi500_code_list_path)
         self.period = 'daily'
         self.adjust = 'hfq'
+        lg = bs.login()
+        print('login respond error_code:'+lg.error_code)
+        print('login respond  error_msg:'+lg.error_msg)
+    
+    def __del__(self):
+        bs.logout()
 
     @retry(max_retries=3, delay=2)
     def fetch_current_stock_spot_df(self):
@@ -49,29 +55,20 @@ class DataFetcher:
 
     @retry(max_retries=3, delay=2)
     def fetch_stock_history_by_symbol(self, symbol: str, start_date: str, end_date: str):
-        start_year = int(start_date[:4])
-        end_year = int(end_date[:4])
-        if end_year - start_year > 20:
-            middle_year = (start_year + end_year) // 2
-            start_date_list = [start_date, f'{middle_year}0101']
-            end_date_list = [f'{middle_year-1}1231', end_date]
-        else:
-            start_date_list = [start_date]
-            end_date_list = [end_date]
-
-        df_all = pd.DataFrame()
-        for m_start_date, m_end_date in zip(start_date_list, end_date_list):
-            df = self.pro.daily(ts_code=symbol, start_date=m_start_date, end_date=m_end_date)
-            time.sleep(1.5)
-            if df is None or df.empty:
-                continue
-            df_all = pd.concat([df_all, df], ignore_index=True)
-        df_all.sort_values(by='trade_date', inplace=True)
-        return df_all
+        symbol = utils.format.format_stock_code(symbol, prefix=True, uppercase=False)
+        pure_symbol = utils.format.pure_stock_code(symbol)
+        try:
+            df = ak.stock_zh_a_hist(pure_symbol, period=self.period, start_date=start_date, end_date=end_date, adjust=self.adjust)
+        except Exception as e:
+            print(f"[fetch_stock_history_by_symbol] Error occurred while fetching history for {symbol}: {e}")
+            df = ak.stock_zh_a_daily(symbol, start_date=start_date, end_date=end_date, adjust=self.adjust)
+            df['volume'] /= 100.0
+        target_df = self.rename_and_clean_df_columns(df)
+        return target_df
     
     @retry(max_retries=3, delay=2)
     def fetch_index_history_by_symbol(self, symbol: str):
-        symbol = symbol.lower()
+        symbol = utils.format.format_stock_code(symbol, prefix=True, uppercase=False)
         try:
             df = ak.stock_zh_index_daily_em(symbol)
             if df is None or df.empty: return None
@@ -80,11 +77,45 @@ class DataFetcher:
         target_df = self.rename_and_clean_df_columns(df)
         return target_df
     
-    def fetch_all_stock_history(self, start_date: str, end_date: str):
+    def fetch_history_data_via_baostock(self, symbol: str, start_date: str, end_date: str):
+        start_date = utils.format.format_date(start_date, format='YYYY-MM-DD')
+        end_date = utils.format.format_date(end_date, format='YYYY-MM-DD')
+        symbol = utils.format.format_stock_code(symbol, prefix=True, uppercase=False, has_dot=True)
+        adjustflag = "1" if self.adjust == 'hfq' else "2" if self.adjust == 'qfq' else "3"
+        rs = bs.query_history_k_data_plus(symbol,"date,open,high,low,close,volume,amount,turn,tradestatus,isST",
+                                        start_date=start_date, end_date=end_date, frequency="d", adjustflag=adjustflag)
+        data_list = []
+        while (rs.error_code == '0') & rs.next():
+            data_list.append(rs.get_row_data())
+        result = pd.DataFrame(data_list, columns=rs.fields)
+        return result
+
+    def fetch_list_stock_history(self, stock_code_list: list, start_date: str, end_date: str):
         full_dir_path = os.path.join(self.data_path, f'{start_date}-{end_date}')
         os.makedirs(full_dir_path, exist_ok=True)
-        if os.path.exists(self.stock_code_list_path):
-            stock_code_list = utils.io.read_file_lines(self.stock_code_list_path)
+        for i in range(len(stock_code_list)):
+            stock_code_list[i] = utils.format.format_stock_code(stock_code_list[i])
+        stock_code_list_temp = []
+        for symbol in stock_code_list:
+            if symbol.startswith('BJ'): continue
+            stock_code_list_temp.append(symbol)
+        stock_code_list = stock_code_list_temp
+        total = len(stock_code_list)
+        print(f"获取成功，共 {total} 只股票。")
+        for i, symbol in enumerate(stock_code_list):
+            if i % 100 == 0: print(f"进度: {i}/{total} ...")
+            file_path = os.path.join(full_dir_path, f'{symbol}.csv')
+            if os.path.exists(file_path): continue
+            history_df = self.fetch_history_data_via_baostock(symbol, start_date, end_date)
+            time.sleep(2)
+            if history_df is not None and not history_df.empty:
+                history_df.to_csv(file_path, index=False)
+            else:
+                print(f'{symbol} skipped (no data)')
+
+    def fetch_all_stock_history(self, start_date: str, end_date: str):
+        if self.stock_code_list:
+            stock_code_list = self.stock_code_list
         else:
             print("fetch stock code list online...")
             df = self.fetch_current_stock_spot_df()
@@ -92,42 +123,44 @@ class DataFetcher:
             stock_code_list = df['代码']
         for i in range(len(stock_code_list)):
             stock_code_list[i] = utils.format.format_stock_code(stock_code_list[i])
-        total = len(stock_code_list)
-        print(f"获取成功，共 {total} 只股票。")
-
-        for i, symbol in enumerate(stock_code_list):
-            if i % 100 == 0: print(f"进度: {i}/{total} ...")
-            file_path = os.path.join(full_dir_path, f'{symbol}.csv')
-            if os.path.exists(file_path): continue
-            history_df = self.fetch_stock_history_by_symbol(symbol, start_date, end_date)
-            time.sleep(2)
-            if history_df is not None and not history_df.empty:
-                history_df.to_csv(file_path, index=False)
-            else:
-                print(f'{symbol} skipped (no data)')
-
-    def fetch_all_index_history(self):
-        if os.path.exists(self.index_code_list_path):
-            index_code_list = utils.io.read_file_lines(self.index_code_list_path)
+        self.fetch_list_stock_history(stock_code_list, start_date, end_date)
+        
+    def fetch_csi500_stock_history(self, start_date: str, end_date: str):
+        if self.csi500_code_list:
+            stock_code_list = self.csi500_code_list
         else:
-            print("fetch index code list online...")
-            df = self.fetch_current_index_spot_df()
-            if df is None: return
-            index_code_list = df['代码']
-        total = len(index_code_list)
-        print(f"获取成功，共 {total} 只指数。")
+            return
+        print(f"获取成功，共 {total} 只股票。")
+        self.fetch_list_stock_history(stock_code_list, start_date, end_date)
 
-        for i, symbol in enumerate(index_code_list):
-            symbol = symbol.lower()
-            if i % 20 == 0: print(f"进度: {i}/{total} ...")
-            file_path = os.path.join(self.data_path, 'cn_index', f'{symbol}.csv')
-            if os.path.exists(file_path): continue
-            history_df = self.fetch_index_history_by_symbol(symbol)
-            time.sleep(2)
-            if history_df is not None and not history_df.empty:
-                history_df.to_csv(file_path, index=False)
-            else:
-                print(f'{symbol} skipped (no data)')
+    def fetch_all_index_history(self, start_date: str, end_date: str):
+        if self.index_code_list:
+            index_code_list = self.index_code_list
+        else:
+            return
+        print(f"获取成功，共 {total} 只指数。")
+        self.fetch_list_stock_history(index_code_list, start_date, end_date)
+
+    # def fetch_all_index_history(self):
+    #     if not self.index_code_list:
+    #         print("fetch index code list online...")
+    #         df = self.fetch_current_index_spot_df()
+    #         if df is None: return
+    #         self.index_code_list = df['代码']
+    #     total = len(self.index_code_list)
+    #     print(f"获取成功，共 {total} 只指数。")
+
+    #     for i, symbol in enumerate(self.index_code_list):
+    #         if i % 100 == 0: print(f"进度: {i}/{total} ...")
+    #         file_path = os.path.join(self.data_path, 'cn_index', f'{symbol}.csv')
+    #         # if os.path.exists(file_path): continue
+    #         history_df = self.fetch_index_history_by_symbol(symbol)
+    #         history_df = self.rename_and_clean_df_columns(history_df)
+    #         time.sleep(1.5)
+    #         if history_df is not None and not history_df.empty:
+    #             history_df.to_csv(file_path, index=False)
+    #         else:
+    #             print(f'{symbol} skipped (no data)')
 
     def rename_and_clean_df_columns(self, df):
         if df is None: return None
@@ -139,18 +172,26 @@ class DataFetcher:
             '最低': 'low',
             '成交量': 'volume',
             '复权因子': 'factor',
+            '成交额': 'amount',
+            '换手率': 'turn',
+            '交易状态': 'tradestatus',
+            '是否ST股': 'isST'
         }
         df = df.rename(columns=rename_map)
         if 'factor' not in df.columns:
             df['factor'] = 1.0
         target_columns = [col for col in rename_map.values() if col in df.columns]
         return df[target_columns]
-
-    def get_df_from_csv(self, csv_file):
-        file_path = os.path.join(self.data_path, csv_file)
-        if not os.path.exists(file_path): return None
-        df = pd.read_csv(file_path, dtype={'symbol': str})
-        return df
     
-    def _pure_stock_code(self, code):
-        return "".join(c for c in code if c.isdigit())
+    def _filter_current_stock_spot_df(self, df):
+        if df is None: return None
+        df['最新价'] = pd.to_numeric(df['最新价'], errors='coerce')
+        df = df.dropna(subset=['最新价'])
+        mask_not_st = ~df['名称'].str.contains('ST', na=False, case=False)
+        filtered_df = df[mask_not_st].copy()
+        return filtered_df.reset_index(drop=True)
+    
+class NewsDataFetcher:
+    def __init__(self):
+        self.data_path = settings.data_path
+        

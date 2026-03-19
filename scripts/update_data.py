@@ -3,21 +3,18 @@ import yaml
 import random
 import json
 import os
-from data_pipeline.fetcher import DataLoader
+from data_pipeline.fetcher import StockDataFetcher
 from data_pipeline.preprocesser import Preprocesser
 import utils.io
+from config.settings import settings
 
 def main():
-    with open('config/settings.yaml', 'r', encoding='utf-8') as f:
-        config = yaml.load(f, Loader=yaml.SafeLoader)
-    data_path = config['data_path']
-    stock_code_list = utils.io.read_file_lines(os.path.join(data_path, 'stock_code_list'))
-    data_loader = DataLoader(data_path)
+    data_fetcher = StockDataFetcher()
     start_date = '20100101'
-    end_date = '20260213'
+    end_date = '20260319'
     dir_name = f'{start_date}-{end_date}'
-    # data_loader.fetch_all_stock_history(start_date, end_date)
-    data_loader.fetch_all_stock_history(start_date, end_date)
+    data_fetcher.fetch_all_stock_history(start_date, end_date)
+    data_fetcher.fetch_all_index_history(start_date, end_date)
     
 
 if __name__ == '__main__':

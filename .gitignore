@@ -8,3 +8,7 @@ __pycache__
 *.pkl
 tensorboard_logs*
 .env
+*.csv
+
+mlruns
+output
