@@ -1,0 +1,25 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: quant-timescaledb
+    restart: unless-stopped
+    ports:
+      - "${TSDB_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: ${TSDB_USER:-postgres}
+      POSTGRES_PASSWORD: ${TSDB_PASSWORD:-your_password}
+      POSTGRES_DB: ${TSDB_DB:-postgres}
+    volumes:
+      - tsdb_data:/var/lib/postgresql/data
+      - ../sql:/docker-entrypoint-initdb.d:ro
+    shm_size: 256mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${TSDB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  tsdb_data:
+    driver: local
