@@ -84,10 +84,10 @@ class StockDataFetcher:
         adjustflag = "1" if self.adjust == 'hfq' else "2" if self.adjust == 'qfq' else "3"
         rs = bs.query_history_k_data_plus(symbol,"date,open,high,low,close,volume,amount,turn,tradestatus,isST",
                                         start_date=start_date, end_date=end_date, frequency="d", adjustflag=adjustflag)
-        data_list = []
-        while (rs.error_code == '0') & rs.next():
-            data_list.append(rs.get_row_data())
-        result = pd.DataFrame(data_list, columns=rs.fields)
+        if rs.error_code == '0':
+            result = rs.get_data()
+        else:
+            result = pd.DataFrame()
         return result
 
     def fetch_list_stock_history(self, stock_code_list: list, start_date: str, end_date: str):
@@ -103,11 +103,12 @@ class StockDataFetcher:
         total = len(stock_code_list)
         print(f"获取成功，共 {total} 只股票。")
         for i, symbol in enumerate(stock_code_list):
+            print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
             if i % 100 == 0: print(f"进度: {i}/{total} ...")
             file_path = os.path.join(full_dir_path, f'{symbol}.csv')
             if os.path.exists(file_path): continue
             history_df = self.fetch_history_data_via_baostock(symbol, start_date, end_date)
-            time.sleep(2)
+            time.sleep(1.5)
             if history_df is not None and not history_df.empty:
                 history_df.to_csv(file_path, index=False)
             else:
@@ -138,6 +139,7 @@ class StockDataFetcher:
             index_code_list = self.index_code_list
         else:
             return
+        total = len(index_code_list)
         print(f"获取成功，共 {total} 只指数。")
         self.fetch_list_stock_history(index_code_list, start_date, end_date)
 
@@ -172,6 +174,7 @@ class StockDataFetcher:
             '最低': 'low',
             '成交量': 'volume',
             '复权因子': 'factor',
+            'total_turnover': 'amount',
             '成交额': 'amount',
             '换手率': 'turn',
             '交易状态': 'tradestatus',

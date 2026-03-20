@@ -9,6 +9,6 @@ __pycache__
 tensorboard_logs*
 .env
 *.csv
-
+build
 mlruns
 output
