@@ -6,7 +6,7 @@ from qlib.config import REG_CN
 from qlib.utils import init_instance_by_config
 
 # --- 配置部分 ---
-PROVIDER_URI = r"C:/Users/sola/Documents/quant/.data/cn_data_0304"
+PROVIDER_URI = r"C:/Users/sola/Documents/quant/.data/qlib_data"
 
 def get_predict_conf(start_date, end_date):
     """构造预测配置"""
@@ -22,7 +22,7 @@ def get_predict_conf(start_date, end_date):
                     "end_time": end_date,
                     "fit_start_time": start_date,
                     "fit_end_time": end_date,
-                    "instruments": "csi500",
+                    "instruments": "top_500_liquidity_stocks",
                     "infer_processors": [
                         {"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}},
                         {"class": "Fillna", "kwargs": {"fields_group": "feature"}}
@@ -62,7 +62,7 @@ if __name__ == '__main__':
     print("正在从 MLflow 加载模型...")
     try:
         recorder = R.get_recorder(
-            recorder_id="ca82f4bb803b49e8b057c1a7f33707a8", 
+            recorder_id="6c6aaaec2fc4431eb78d5b17d709b348", 
             experiment_id="379677092195942384"
         )
         model = recorder.load_object("params.pkl")

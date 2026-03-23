@@ -9,6 +9,7 @@ __pycache__
 tensorboard_logs*
 .env
 *.csv
+.pytest_cache
 build
 mlruns
 output

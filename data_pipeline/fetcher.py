@@ -131,6 +131,7 @@ class StockDataFetcher:
             stock_code_list = self.csi500_code_list
         else:
             return
+        total = len(stock_code_list)
         print(f"获取成功，共 {total} 只股票。")
         self.fetch_list_stock_history(stock_code_list, start_date, end_date)
 

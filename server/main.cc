@@ -212,7 +212,7 @@ public:
 
 private:
     DataBuffer<DailyBar> m_buffer;
-    static constexpr size_t MAX_BATCH = 8192;
+    static constexpr size_t MAX_BATCH = 4096;
 };
 
 // ─── Query Handlers ───
@@ -226,8 +226,8 @@ void queryByDate(const drogon::HttpRequestPtr& req,
         return;
     }
 
-    int limit  = std::atoi(req->getParameter("limit").c_str());
-    int offset = std::atoi(req->getParameter("offset").c_str());
+    int64_t limit  = std::atoll(req->getParameter("limit").c_str());
+    int64_t offset = std::atoll(req->getParameter("offset").c_str());
     if (limit <= 0) limit = 5000;
     if (offset < 0) offset = 0;
 
@@ -260,8 +260,8 @@ void queryBySymbolAndDateRange(const drogon::HttpRequestPtr& req,
         return;
     }
 
-    int limit  = std::atoi(req->getParameter("limit").c_str());
-    int offset = std::atoi(req->getParameter("offset").c_str());
+    int64_t limit  = std::atoll(req->getParameter("limit").c_str());
+    int64_t offset = std::atoll(req->getParameter("offset").c_str());
     if (limit <= 0) limit = 5000;
     if (offset < 0) offset = 0;
 
@@ -291,8 +291,8 @@ void queryByMultipleSymbols(const drogon::HttpRequestPtr& req,
         auto symbols = body.at("symbols").get<std::vector<std::string>>();
         auto start   = body.at("start_date").get<std::string>();
         auto end     = body.at("end_date").get<std::string>();
-        int limit    = body.value("limit", 50000);
-        int offset   = body.value("offset", 0);
+        int64_t limit    = body.value("limit", 50000);
+        int64_t offset   = body.value("offset", 0);
 
         if (symbols.empty()) {
             callback(errorResponse("'symbols' array must not be empty"));
@@ -331,7 +331,7 @@ void queryByMultipleSymbols(const drogon::HttpRequestPtr& req,
 void queryLatestN(const drogon::HttpRequestPtr& req,
                   std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
     auto symbol = req->getParameter("symbol");
-    int n = std::atoi(req->getParameter("n").c_str());
+    int64_t n = std::atoll(req->getParameter("n").c_str());
     if (symbol.empty()) {
         callback(errorResponse("missing 'symbol' parameter"));
         return;
@@ -523,16 +523,16 @@ int main() {
 
     // --- Periodic flush ---
     drogon::app().registerBeginningAdvice([]() {
-        LOG_INFO << "Drogon started. Flush timer active (5s interval).";
-        drogon::app().getLoop()->runEvery(5.0, []() {
+        LOG_INFO << "Drogon started. Flush timer active (2s interval).";
+        drogon::app().getLoop()->runEvery(2.0, []() {
             manager.flushToStorage(storage);
         });
     });
 
     LOG_INFO << "Quant Data Gateway — http://0.0.0.0:8080";
     LOG_INFO << "Endpoints:";
-    LOG_INFO << "  POST   /api/v1/ingest/daily          (batch ingest)";
-    LOG_INFO << "  POST   /api/v1/ingest/daily/single   (single ingest)";
+    LOG_INFO << "  POST   /api/v1/ingest/daily           (batch ingest)";
+    LOG_INFO << "  POST   /api/v1/ingest/daily/single    (single ingest)";
     LOG_INFO << "  GET    /api/v1/query/daily/all        (?date=)";
     LOG_INFO << "  GET    /api/v1/query/daily/symbol     (?symbol=&start_date=&end_date=)";
     LOG_INFO << "  POST   /api/v1/query/daily/symbols    (multi-symbol query)";

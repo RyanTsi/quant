@@ -7,14 +7,14 @@ import os
 from config.settings import settings
 
 # 1. 唤醒 Qlib
-provider_uri = r"C:/Users/sola/Documents/quant/.data/cn_data_my"
+provider_uri = r"C:/Users/sola/Documents/quant/.data/qlib_data"
 qlib.init(provider_uri=provider_uri, region=REG_CN)
 
 # 2. 告诉 Qlib 去哪里找实验数据
 R.set_uri(r"file:///C:/Users/sola/Documents/quant/mlruns")
 
 # 2. 获取记录器
-recorder_id = "86d53a8a246d40008bcc31006f2a874a"
+recorder_id = "6c6aaaec2fc4431eb78d5b17d709b348"
 exp_id = "379677092195942384"
 recorder = R.get_exp(experiment_id=exp_id).get_recorder(recorder_id=recorder_id)
 
@@ -28,7 +28,7 @@ print("正在生成 IC/IR 预测能力分析图表...")
 # 将拼接好的完整数据交给 Qlib 画图
 figs = analysis_model.model_performance_graph(pred_label, show_notebook=False)
 
-path = os.path.join(settings.output_path, recorder_id)
+path = os.path.join(settings.analysis_path, recorder_id)
 if not os.path.exists(path):
     os.makedirs(path, exist_ok=True)
     
