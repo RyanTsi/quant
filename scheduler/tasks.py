@@ -4,7 +4,8 @@ import os
 from datetime import datetime, timedelta
 from functools import wraps
 
-from utils.run_tracker import record_run, get_last_date, today, today_dash
+from utils.format import format_date
+from utils.run_tracker import record_run, get_last_run, today, today_dash
 from config.settings import settings
 
 logger = logging.getLogger("scheduler")
@@ -40,7 +41,8 @@ def fetch_data():
 
     fetcher = StockDataFetcher()
 
-    last = get_last_date("fetch_stock", default="20100101")
+    last = get_last_run("fetch_stock")["last_run"][:10]
+    last = format_date(last,"YYYYMMDD")
     last_dt = datetime.strptime(last, "%Y%m%d")
     start_date = (last_dt - timedelta(days=7)).strftime("%Y%m%d")
     end_date = today()

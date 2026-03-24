@@ -6,6 +6,7 @@ stock_data
 __pycache__
 *.zip
 *.pkl
+*.log
 tensorboard_logs*
 .env
 *.csv
