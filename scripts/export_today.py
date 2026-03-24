@@ -46,7 +46,7 @@ def fetch_all_by_date(client: DBClient, date: str, page_size=5000):
     return pd.DataFrame(all_rows)
 
 
-def wexport_date_to_csv(date: str, output_dir: str = None) -> str | None:
+def export_date_to_csv(date: str, output_dir: str = None) -> str | None:
     """Export a single date's market data to CSV. Returns the output path or None."""
     client = DBClient(settings.db_host, settings.db_port)
 
@@ -85,7 +85,7 @@ def main():
                         help="Output CSV path (default: .data/market_<date>.csv)")
     args = parser.parse_args()
 
-    result = export_date_to_csv(args.date)
+    result = export_date_to_csv(args.date, output_dir=args.output)
     if result is None:
         sys.exit(1)
 

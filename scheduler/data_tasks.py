@@ -35,19 +35,14 @@ def fetch_data():
 @task("ingest_to_db")
 def ingest_to_db():
     """Push CSV data to the C++ data gateway via HTTP."""
-    from scripts.put_data import ingest_directory
+    from data_pipeline.ingest import ingest_directory
 
     server_url = f"http://{settings.db_host}:{settings.db_port}"
-    data_dir = os.path.join(settings.data_path, f"{get_last_date('fetch_stock', '20100101')}-{today()}")
+    data_dir = settings.send_buffer_path
 
     if not os.path.isdir(data_dir):
-        candidates = [d for d in os.listdir(settings.data_path)
-                      if os.path.isdir(os.path.join(settings.data_path, d)) and "-" in d]
-        if candidates:
-            data_dir = os.path.join(settings.data_path, sorted(candidates)[-1])
-        else:
-            logger.warning("  No data directory found, skipping.")
-            return
+        logger.warning("  No data directory found, skipping.")
+        return
 
     logger.info(f"  Server: {server_url}")
     logger.info(f"  Data:   {data_dir}")

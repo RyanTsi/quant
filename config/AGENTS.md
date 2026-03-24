@@ -1,6 +1,6 @@
 # config/
 
-Global configuration. Single source of truth for paths, API tokens, and connection settings.
+Global configuration. Single source of truth for paths, API tokens, connection settings, and Qlib parameters.
 
 ## Files
 
@@ -12,9 +12,13 @@ Global configuration. Single source of truth for paths, API tokens, and connecti
 
 ```python
 from config.settings import settings
-settings.data_path      # .data/
-settings.db_host        # from .env or default 127.0.0.1
-settings.db_port        # from .env or default 8080
+settings.data_path            # .data/
+settings.db_host              # from .env or default 127.0.0.1
+settings.db_port              # from .env or default 8080
+settings.qlib_provider_uri    # Qlib binary data path
+settings.qlib_recorder_id     # MLflow recorder for model loading
+settings.qlib_experiment_id   # MLflow experiment ID
+settings.qlib_mlruns_uri      # MLflow tracking URI
 ```
 
 ## Conventions

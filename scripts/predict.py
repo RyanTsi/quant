@@ -1,3 +1,9 @@
+"""Generate stock predictions using the latest trained model.
+
+Usage:
+    python -m scripts.predict
+"""
+
 import qlib
 import pandas as pd
 from qlib.data import D
@@ -5,11 +11,10 @@ from qlib.workflow import R
 from qlib.config import REG_CN
 from qlib.utils import init_instance_by_config
 
-# --- 配置部分 ---
-PROVIDER_URI = r"C:/Users/sola/Documents/quant/.data/qlib_data"
+from config.settings import settings
+
 
 def get_predict_conf(start_date, end_date):
-    """构造预测配置"""
     return {
         "class": "TSDatasetH",
         "module_path": "qlib.data.dataset",
@@ -41,54 +46,44 @@ def get_predict_conf(start_date, end_date):
         },
     }
 
-# --- 执行部分 (必须放在保护块内) ---
-if __name__ == '__main__':
-    # 1. 初始化 Qlib
-    print(f"正在初始化 Qlib 数据路径: {PROVIDER_URI}")
-    qlib.init(provider_uri=PROVIDER_URI, region=REG_CN)
 
-    # 2. 计算日期
-    # 注意：这里需要在 init 之后调用 D.calendar
+if __name__ == '__main__':
+    qlib.init(provider_uri=settings.qlib_provider_uri, region=REG_CN)
+
     all_calendar = D.calendar(freq='day')
     latest_date = all_calendar[-1]
-    # 往前取 180 天确保指标计算完整
+    # ~120 trading days lookback for Alpha158 indicator warm-up
     start_date_for_predict = all_calendar[-120]
-    
-    
-    print(f"最新交易日: {latest_date}")
-    print(f"数据预热起点: {start_date_for_predict}")
 
-    # 3. 加载模型
-    print("正在从 MLflow 加载模型...")
+    print(f"Latest trading day: {latest_date}")
+    print(f"Lookback start:     {start_date_for_predict}")
+
+    print("Loading model from MLflow...")
     try:
         recorder = R.get_recorder(
-            recorder_id="6c6aaaec2fc4431eb78d5b17d709b348", 
-            experiment_id="379677092195942384"
+            recorder_id=settings.qlib_recorder_id,
+            experiment_id=settings.qlib_experiment_id,
         )
         model = recorder.load_object("params.pkl")
     except Exception as e:
-        print(f"模型加载失败，请检查 Recorder ID 是否正确: {e}")
-        exit()
+        print(f"Failed to load model: {e}")
+        exit(1)
 
-    # 4. 准备数据并预测
-    print("正在计算 Alpha158 特征 (多进程执行中，请稍候)...")
+    print("Computing Alpha158 features ...")
     predict_dataset_conf = get_predict_conf(start_date_for_predict, latest_date)
     dataset = init_instance_by_config(predict_dataset_conf)
-    
+
     pred_score = model.predict(dataset)
 
-    # 5. 格式化输出结果
-    print("\n" + "="*50)
-    print(f"🚀 {latest_date} 选股预测 TOP 20")
-    print("="*50)
-    
-    # 整理结果 DataFrame
+    print("\n" + "=" * 50)
+    print(f"{latest_date} Top Predictions")
+    print("=" * 50)
+
     result_df = pred_score.sort_values(ascending=False).to_frame("Score")
-    result_df.index = result_df.index.get_level_values('instrument') # 简化索引
+    result_df.index = result_df.index.get_level_values('instrument')
 
     print(result_df)
-    
-    # 6. 保存结果
-    output_filename = f"top_picks.csv"
+
+    output_filename = "top_picks.csv"
     result_df.to_csv(output_filename)
-    print(f"\n结果已保存至: {output_filename}")
+    print(f"\nSaved to: {output_filename}")

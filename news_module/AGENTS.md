@@ -1,6 +1,14 @@
 # news_module/
 
-Financial news scraping service with clean architecture (interface → scraper → repository → service).
+**Status: Work In Progress** — Only mock scraper implemented. Known broken imports (`news_module.config` missing, `models.py` references non-existent `summary` field). Do not depend on this module from the main pipeline.
+
+## Architecture
+
+```
+ScraperInterface  ←  MockFinancialScraper (add real scrapers here)
+       ↓
+NewsCrawlerService  →  NewsRepository  →  SQLAlchemy DB
+```
 
 ## Files
 
@@ -13,18 +21,6 @@ Financial news scraping service with clean architecture (interface → scraper �
 | `models.py`             | ORM model definitions                           |
 | `scrapers/base.py`      | Scraper base utilities                          |
 | `scrapers/mock_scraper.py` | Mock scraper for testing                     |
-
-## Architecture
-
-```
-ScraperInterface  ←  MockFinancialScraper (add real scrapers here)
-       ↓
-NewsCrawlerService  →  NewsRepository  →  SQLAlchemy DB
-```
-
-## Status
-
-Work in progress. Only mock scraper implemented. To add a real scraper, implement `ScraperInterface` and register it in the service.
 
 ## See Also
 

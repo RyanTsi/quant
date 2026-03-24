@@ -1,11 +1,12 @@
 from data_pipeline.fetcher import StockDataFetcher
-from utils.run_tracker import record_run, get_last_date, today
+from utils.run_tracker import record_run, get_last_run, today
 
 
 def main():
     data_fetcher = StockDataFetcher()
 
-    start_date = get_last_date("fetch_stock", default="20100101")
+    last = get_last_run("fetch_stock")
+    start_date = last.get("end_date", "20100101") if last else "20100101"
     end_date = today()
 
     print(f"Fetching data: {start_date} -> {end_date}")

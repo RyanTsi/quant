@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import src.data_loader.preprocess_data as predata
 
 class LSTMModel(nn.Module):
     def __init__(self, input_dim, hidden_dim, num_layers, output_dim, embedding_dim, dropout=0.5):

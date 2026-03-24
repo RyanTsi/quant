@@ -6,10 +6,11 @@ from qlib.constant import REG_CN
 from qlib.utils import init_instance_by_config, flatten_dict
 from qlib.workflow import R
 from qlib.workflow.record_temp import SignalRecord, SigAnaRecord, PortAnaRecord
+from config.settings import settings
 from utils.run_tracker import record_run, today_dash
 
 
-PROVIDER_URI = "~/Documents/quant/.data/qlib_data"
+PROVIDER_URI = settings.qlib_provider_uri
 MARKET = "top_500_liquidity_stocks"
 BENCHMARK = "SH000001"
 SEED = 10059483

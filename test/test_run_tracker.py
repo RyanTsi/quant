@@ -3,7 +3,7 @@ import json
 import os
 import tempfile
 from unittest.mock import patch
-from utils.run_tracker import record_run, get_last_run, get_last_date, today, _load, _save
+from utils.run_tracker import record_run, get_last_run, today, _load, _save, init
 
 
 class TestRunTracker(unittest.TestCase):
@@ -14,7 +14,7 @@ class TestRunTracker(unittest.TestCase):
         )
         self.tmp.write("{}")
         self.tmp.close()
-        self.patcher = patch("utils.run_tracker.TRACKER_FILE", self.tmp.name)
+        self.patcher = patch("utils.run_tracker._tracker_file", self.tmp.name)
         self.patcher.start()
 
     def tearDown(self):
@@ -51,7 +51,14 @@ class TestRunTracker(unittest.TestCase):
         b = get_last_run("task_b")
         self.assertEqual(a["status"], "done")
         self.assertEqual(b["status"], "running")
-        
+
+    def test_init_sets_tracker_file(self):
+        tmpdir = tempfile.mkdtemp()
+        init(tmpdir)
+        from utils import run_tracker
+        self.assertEqual(run_tracker._tracker_file, os.path.join(tmpdir, "run_history.json"))
+        os.rmdir(tmpdir)
+
 
 if __name__ == "__main__":
     unittest.main()

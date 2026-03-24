@@ -1,3 +1,7 @@
+"""DEPRECATED: This module is no longer in the active pipeline.
+Kept for reference. Feature engineering now handled by Qlib Alpha158 handler.
+"""
+
 import numpy as np
 import pandas as pd
 import talib as ta

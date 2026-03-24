@@ -12,9 +12,7 @@ Low-level utility functions. No business logic. No imports from higher-level mod
 
 ## Dependency Rule
 
-This module is a leaf in the dependency graph. It may import only stdlib and third-party libraries. NEVER import from `config`, `data_pipeline`, `scheduler`, etc.
-
-Exception: `run_tracker.py` imports `config.settings` for the data path — this is a known violation to be refactored.
+This module is a leaf in the dependency graph. It may import only stdlib and third-party libraries. `run_tracker.py` uses lazy fallback to `config.settings` only if `init(data_path)` was not called explicitly.
 
 ## See Also
 

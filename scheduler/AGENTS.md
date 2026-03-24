@@ -25,6 +25,7 @@ FULL_PIPELINE:                       all tasks end-to-end
 - Every task function is decorated with `@task("name")`.
 - Tasks call `record_run()` on success for tracking.
 - Pipelines are plain lists of task functions; `run_pipeline` runs them sequentially.
+- `ingest_to_db` imports from `data_pipeline.ingest` (not `scripts`).
 
 ## See Also
 
