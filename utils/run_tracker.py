@@ -37,14 +37,6 @@ def get_last_run(task_name: str):
     return data.get(task_name)
 
 
-def get_last_date(task_name: str, default: str = "20100101") -> str:
-    """Get the last_date from the last run of a task, or *default* if never run."""
-    entry = get_last_run(task_name)
-    if entry is None:
-        return default
-    return entry.get("last_date", default)
-
-
 def today() -> str:
     return datetime.now().strftime("%Y%m%d")
 

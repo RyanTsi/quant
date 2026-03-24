@@ -36,7 +36,7 @@ logger = logging.getLogger("main")
 
 def setup_schedule():
     import schedule
-    from scheduler.tasks import (
+    from scheduler.pipelines import (
         EVENING_PIPELINE, AFTERNOON_PIPELINE, run_pipeline,
     )
 
@@ -53,7 +53,7 @@ def setup_schedule():
         day.at("14:00").do(run_pipeline, AFTERNOON_PIPELINE)
 
     # TODO: Weekly model retrain — enable when retraining workflow is ready
-    # from scheduler.tasks import WEEKLY_RETRAIN_PIPELINE
+    # from scheduler.pipelines import WEEKLY_RETRAIN_PIPELINE
     # schedule.every().saturday.at("02:00").do(run_pipeline, WEEKLY_RETRAIN_PIPELINE)
 
     return schedule
@@ -84,9 +84,9 @@ def run_scheduler():
 
 
 def run_once(task_name: str):
-    from scheduler.tasks import (
-        fetch_data, dump_to_qlib, ingest_to_db, export_from_db,
-        train_model, predict,
+    from scheduler.data_tasks import fetch_data, ingest_to_db, export_from_db
+    from scheduler.model_tasks import dump_to_qlib, train_model, predict
+    from scheduler.pipelines import (
         EVENING_PIPELINE, AFTERNOON_PIPELINE, FULL_PIPELINE,
         run_pipeline,
     )

@@ -90,8 +90,11 @@ class StockDataFetcher:
             result = pd.DataFrame()
         return result
 
-    def fetch_list_stock_history(self, stock_code_list: list, start_date: str, end_date: str):
-        full_dir_path = os.path.join(self.data_path, f'{start_date}-{end_date}')
+    def fetch_list_stock_history(self, stock_code_list: list, start_date: str, end_date: str, save_dir: str = None):
+        if save_dir is None:
+            full_dir_path = os.path.join(self.data_path, f'{start_date}-{end_date}')
+        else:
+            full_dir_path = save_dir
         os.makedirs(full_dir_path, exist_ok=True)
         for i in range(len(stock_code_list)):
             stock_code_list[i] = utils.format.format_stock_code(stock_code_list[i])
@@ -103,18 +106,17 @@ class StockDataFetcher:
         total = len(stock_code_list)
         print(f"获取成功，共 {total} 只股票。")
         for i, symbol in enumerate(stock_code_list):
-            print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
-            if i % 100 == 0: print(f"进度: {i}/{total} ...")
+            if i % 100 == 0: print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()) + f" - 进度: {i}/{total} ...")
             file_path = os.path.join(full_dir_path, f'{symbol}.csv')
             if os.path.exists(file_path): continue
             history_df = self.fetch_history_data_via_baostock(symbol, start_date, end_date)
-            time.sleep(1.5)
+            time.sleep(1.0)
             if history_df is not None and not history_df.empty:
                 history_df.to_csv(file_path, index=False)
             else:
                 print(f'{symbol} skipped (no data)')
 
-    def fetch_all_stock_history(self, start_date: str, end_date: str):
+    def fetch_all_stock_history(self, start_date: str, end_date: str, save_dir: str = None):
         if self.stock_code_list:
             stock_code_list = self.stock_code_list
         else:
@@ -124,46 +126,26 @@ class StockDataFetcher:
             stock_code_list = df['代码']
         for i in range(len(stock_code_list)):
             stock_code_list[i] = utils.format.format_stock_code(stock_code_list[i])
-        self.fetch_list_stock_history(stock_code_list, start_date, end_date)
+        self.fetch_list_stock_history(stock_code_list, start_date, end_date, save_dir)
         
-    def fetch_csi500_stock_history(self, start_date: str, end_date: str):
+    def fetch_csi500_stock_history(self, start_date: str, end_date: str, save_dir: str = None):
         if self.csi500_code_list:
             stock_code_list = self.csi500_code_list
         else:
             return
         total = len(stock_code_list)
         print(f"获取成功，共 {total} 只股票。")
-        self.fetch_list_stock_history(stock_code_list, start_date, end_date)
+        self.fetch_list_stock_history(stock_code_list, start_date, end_date, save_dir)
 
-    def fetch_all_index_history(self, start_date: str, end_date: str):
+    def fetch_all_index_history(self, start_date: str, end_date: str, save_dir: str = None):
         if self.index_code_list:
             index_code_list = self.index_code_list
         else:
             return
         total = len(index_code_list)
         print(f"获取成功，共 {total} 只指数。")
-        self.fetch_list_stock_history(index_code_list, start_date, end_date)
+        self.fetch_list_stock_history(index_code_list, start_date, end_date, save_dir)
 
-    # def fetch_all_index_history(self):
-    #     if not self.index_code_list:
-    #         print("fetch index code list online...")
-    #         df = self.fetch_current_index_spot_df()
-    #         if df is None: return
-    #         self.index_code_list = df['代码']
-    #     total = len(self.index_code_list)
-    #     print(f"获取成功，共 {total} 只指数。")
-
-    #     for i, symbol in enumerate(self.index_code_list):
-    #         if i % 100 == 0: print(f"进度: {i}/{total} ...")
-    #         file_path = os.path.join(self.data_path, 'cn_index', f'{symbol}.csv')
-    #         # if os.path.exists(file_path): continue
-    #         history_df = self.fetch_index_history_by_symbol(symbol)
-    #         history_df = self.rename_and_clean_df_columns(history_df)
-    #         time.sleep(1.5)
-    #         if history_df is not None and not history_df.empty:
-    #             history_df.to_csv(file_path, index=False)
-    #         else:
-    #             print(f'{symbol} skipped (no data)')
 
     def rename_and_clean_df_columns(self, df):
         if df is None: return None

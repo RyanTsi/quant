@@ -13,6 +13,7 @@ class Settings:
         # path settings
         self.data_path = os.path.join(BASE_DIR, '.data')
         self.analysis_path = os.path.join(self.data_path, 'stock_analysis')
+        self.send_buffer_path = os.path.join(self.data_path, 'send_buffer')
         # API tokens
         self.tu_token = os.getenv('TU_TOKEN')
         # server settings (C++ HTTP gateway, not the DB port)
@@ -28,6 +29,7 @@ class Settings:
             os.makedirs(self.data_path, exist_ok=True)
         if not os.path.exists(self.analysis_path):
             os.makedirs(self.analysis_path, exist_ok=True)
-        
-
+        if not os.path.exists(self.send_buffer_path):
+            os.makedirs(self.send_buffer_path, exist_ok=True)
+            
 settings = Settings()

@@ -72,7 +72,7 @@ def ingest_directory(base_url: str, data_dir: str):
 
 if __name__ == "__main__":
     server_url = f"http://{settings.db_host}:{settings.db_port}"
-    data_dir = os.path.join(settings.data_path, "20100101-20260319")
+    data_dir = os.path.join(settings.data_path, "20260312-20260324")
 
     if len(sys.argv) > 1:
         data_dir = sys.argv[1]
