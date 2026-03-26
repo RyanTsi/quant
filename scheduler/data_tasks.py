@@ -25,6 +25,7 @@ def fetch_data():
 
     logger.info(f"  Fetching: {start_date} -> {end_date} (last_run={last}, lookback 7d)")
     save_dir = os.path.join(settings.data_path, f'{start_date}-{end_date}')
+    os.makedirs(save_dir, exist_ok=True)
     fetcher.fetch_all_stock_history(start_date, end_date, save_dir)
     fetcher.fetch_all_index_history(start_date, end_date, save_dir)
     package_data(save_dir, settings.send_buffer_path)
@@ -59,7 +60,7 @@ def export_from_db():
 
     START_DATE = "2010-01-01"
     end_date = datetime.now().strftime("%Y-%m-%d")
-    output_dir = os.path.join(settings.data_path, "db_export")
+    output_dir = settings.receive_buffer_path
     os.makedirs(output_dir, exist_ok=True)
 
     client = DBClient(settings.db_host, settings.db_port)
@@ -77,14 +78,14 @@ def export_from_db():
     logger.info(f"  Exporting {total} symbols: {START_DATE} -> {end_date}")
 
     csv_columns = ["date", "open", "high", "low", "close",
-                   "volume", "amount", "turn", "tradestatus", "isST"]
+                   "volume", "amount", "turn", "isST", "factor"]
     db_to_csv = {"is_st": "isST"}
 
     exported = 0
     for i, symbol in enumerate(symbols):
         all_rows = []
         offset = 0
-        page_size = 5000
+        page_size = 3000
         while True:
             r = client.query_data(symbol, START_DATE, end_date,
                                   limit=page_size, offset=offset)
@@ -101,10 +102,13 @@ def export_from_db():
 
         df = pd.DataFrame(all_rows)
         df.rename(columns=db_to_csv, inplace=True)
+        if 'factor' not in df.columns:
+            df['factor'] = 1.0
         if "date" in df.columns:
             df["date"] = df["date"].astype(str).str[:10]
         if "symbol" in df.columns:
             df.drop(columns=["symbol"], inplace=True)
+        df = df[df['tradestatus'] != 0] 
         existing = [c for c in csv_columns if c in df.columns]
         df = df[existing]
         df.to_csv(os.path.join(output_dir, f"{symbol}.csv"), index=False)
@@ -114,5 +118,4 @@ def export_from_db():
             logger.info(f"  Progress: {i + 1}/{total}")
 
     logger.info(f"  Exported {exported}/{total} symbols to {output_dir}")
-    record_run("export_from_db", start_date=START_DATE, end_date=end_date,
-               output_dir=output_dir, symbols=exported)
+    record_run("export_from_db", output_dir=output_dir)

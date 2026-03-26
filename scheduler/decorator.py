@@ -6,6 +6,12 @@ from functools import wraps
 logger = logging.getLogger("scheduler")
 
 
+class TaskFailed(RuntimeError):
+    def __init__(self, task_name: str, message: str):
+        super().__init__(message)
+        self.task_name = task_name
+
+
 def task(name: str):
     """Decorator that wraps a task with logging, timing, and error handling."""
     def decorator(func):
@@ -19,8 +25,9 @@ def task(name: str):
                 logger.info(f"[{name}] finished in {elapsed:.1f}s")
                 return result
             except Exception:
-                logger.error(f"[{name}] failed:\n{traceback.format_exc()}")
-                return None
+                tb = traceback.format_exc()
+                logger.error(f"[{name}] failed:\n{tb}")
+                raise TaskFailed(name, tb)
         wrapper.task_name = name
         return wrapper
     return decorator

@@ -73,5 +73,6 @@ def ingest_directory(base_url: str, data_dir: str):
                     logger.error("[%s] batch %d failed: %d %s", symbol, i // BATCH_SIZE + 1, resp.status_code, resp.text)
             except Exception as e:
                 logger.error("[%s] batch %d error: %s", symbol, i // BATCH_SIZE + 1, e)
-
+                
+        os.remove(filepath)
         logger.info("[%d/%d] %s: %d rows sent.", idx, total, symbol, len(data_list))

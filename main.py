@@ -5,7 +5,7 @@ Usage:
     python main.py                     # Start the scheduler (daily scheduled tasks)
     python main.py --run evening       # Run the evening pipeline once (fetch + ingest)
     python main.py --run afternoon     # Run the afternoon pipeline once (export + dump + predict)
-    python main.py --run full          # Run the full pipeline once
+    python main.py --run full          # Run full pipeline once (fetch, ingest, export, dump, train, predict)
     python main.py --run fetch         # Run a single task and exit
     python main.py --run ingest
     python main.py --run export

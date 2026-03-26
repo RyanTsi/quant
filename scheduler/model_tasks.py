@@ -14,8 +14,8 @@ def dump_to_qlib():
     import subprocess
     import sys
 
-    csv_dir = os.path.join(settings.data_path, "db_export")
-    qlib_dir = os.path.join(settings.data_path, "qlib_data")
+    csv_dir = settings.receive_buffer_path
+    qlib_dir = settings.qlib_data_path
 
     if not os.path.isdir(csv_dir) or not os.listdir(csv_dir):
         logger.warning("  No CSV data in db_export/, skipping.")
@@ -24,13 +24,18 @@ def dump_to_qlib():
     logger.info(f"  Source: {csv_dir}")
     logger.info(f"  Target: {qlib_dir}")
 
-    subprocess.run([
-        sys.executable, "scripts/dump_bin.py", "dump_all",
-        f"--csv_path={csv_dir}",
-        f"--qlib_dir={qlib_dir}",
-        "--date_field_name=date",
-        "--include_fields=open,high,low,close,volume,amount,turn",
-    ], check=True)
+    subprocess.run(
+        [
+            sys.executable,
+            "scripts/dump_bin.py",
+            "dump_all",
+            f"--data_path={csv_dir}",
+            f"--qlib_dir={qlib_dir}",
+            "--include_fields=open,high,low,close,volume,amount,turn,isST,factor",
+            "--file_suffix=.csv",
+        ],
+        check=True,
+    )
 
     record_run("dump_to_qlib", csv_dir=csv_dir, qlib_dir=qlib_dir)
 
@@ -40,7 +45,10 @@ def predict():
     """Generate stock predictions using the latest trained model."""
     import subprocess
     import sys
-    subprocess.run([sys.executable, "scripts/predict.py"], check=True)
+    subprocess.run(
+        [sys.executable, "-m", "scripts.predict"],
+        check=True,
+    )
     record_run("predict", date=today_dash())
 
 

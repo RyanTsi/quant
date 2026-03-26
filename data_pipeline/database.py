@@ -3,6 +3,7 @@
 import logging
 
 import requests
+from config.settings import settings
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -86,7 +87,9 @@ class DBClient:
     def list_symbols(self):
         url = f"{self.base_url}/symbols"
         try:
-            response = self.session.get(url, timeout=10)
+            response = self.session.get(
+                url, timeout=settings.gateway_list_symbols_timeout
+            )
             return response
         except Exception as e:
             logger.error("List symbols failed: %s", e)

@@ -9,6 +9,10 @@ class TestSettings(unittest.TestCase):
     def test_db_port_is_int(self):
         self.assertIsInstance(settings.db_port, int)
 
+    def test_gateway_list_symbols_timeout_is_int(self):
+        self.assertIsInstance(settings.gateway_list_symbols_timeout, int)
+        self.assertGreaterEqual(settings.gateway_list_symbols_timeout, 10)
+
     def test_db_host_is_str(self):
         self.assertIsInstance(settings.db_host, str)
 
