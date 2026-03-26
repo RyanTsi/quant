@@ -2,7 +2,13 @@
 
 Usage:
     python -m scripts.predict
+    python -m scripts.predict --date 2026-03-05
+    python -m scripts.predict --date 2026-03-05 --out output/top_picks_2026-03-05.csv
 """
+
+import argparse
+import os
+from pathlib import Path
 
 import qlib
 import pandas as pd
@@ -12,6 +18,7 @@ from qlib.config import REG_CN
 from qlib.utils import init_instance_by_config
 
 from config.settings import settings
+from utils.run_tracker import get_last_run
 
 
 def get_predict_conf(start_date, end_date):
@@ -47,36 +54,80 @@ def get_predict_conf(start_date, end_date):
     }
 
 
-if __name__ == '__main__':
+def _resolve_predict_date(calendar, date_str: str | None):
+    if calendar is None or len(calendar) == 0:
+        raise RuntimeError("Empty Qlib calendar. Check your provider_uri and dumped data.")
+    if not date_str:
+        return pd.Timestamp(calendar[-1]).strftime("%Y-%m-%d")
+    target = pd.Timestamp(date_str).strftime("%Y-%m-%d")
+    cal_str = [pd.Timestamp(x).strftime("%Y-%m-%d") for x in calendar]
+    if target not in cal_str:
+        raise ValueError(f"Date {target} not in local trading calendar (available: {cal_str[0]} ... {cal_str[-1]}).")
+    return target
+
+
+def _lookback_start(calendar, end_date: str, lookback: int = 120) -> str:
+    cal_str = [pd.Timestamp(x).strftime("%Y-%m-%d") for x in calendar]
+    end_date_str = pd.Timestamp(end_date).strftime("%Y-%m-%d")
+    idx = cal_str.index(end_date_str)
+    start_idx = max(0, idx - lookback)
+    return cal_str[start_idx]
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Predict for a given local trading day")
+    parser.add_argument("--date", type=str, default=None, help="Target trading day (YYYY-MM-DD). Default: latest.")
+    parser.add_argument("--out", type=str, default=None, help="Output csv path. Default: output/top_picks_<date>.csv")
+    args = parser.parse_args()
+
     qlib.init(provider_uri=settings.qlib_provider_uri, region=REG_CN)
 
     all_calendar = D.calendar(freq='day')
-    latest_date = all_calendar[-1]
+    predict_date = _resolve_predict_date(all_calendar, args.date)
     # ~120 trading days lookback for Alpha158 indicator warm-up
-    start_date_for_predict = all_calendar[-120]
+    start_date_for_predict = _lookback_start(all_calendar, predict_date, lookback=120)
 
-    print(f"Latest trading day: {latest_date}")
+    print(f"Predict date:       {predict_date}")
     print(f"Lookback start:     {start_date_for_predict}")
 
     print("Loading model from MLflow...")
     try:
+        env_recorder_id = os.getenv("QLIB_RECORDER_ID")
+        env_experiment_id = os.getenv("QLIB_EXPERIMENT_ID")
+
+        if env_recorder_id and env_experiment_id:
+            recorder_id = env_recorder_id
+            experiment_id = env_experiment_id
+        else:
+            last = get_last_run("qlib_train")
+            if not last:
+                raise RuntimeError("No trained model found: run_history.json.qlib_train is empty.")
+            recorder_id = last.get("recorder_id")
+            experiment_id = last.get("experiment_id")
+            if not recorder_id or not experiment_id:
+                raise RuntimeError("No trained model found: missing recorder_id/experiment_id in run_history.json.qlib_train.")
+
         recorder = R.get_recorder(
-            recorder_id=settings.qlib_recorder_id,
-            experiment_id=settings.qlib_experiment_id,
+            recorder_id=recorder_id,
+            experiment_id=experiment_id,
         )
-        model = recorder.load_object("params.pkl")
+        # Prefer our saved key from workflow, fallback to historical qlib examples.
+        try:
+            model = recorder.load_object("trained_model")
+        except Exception:
+            model = recorder.load_object("params.pkl")
     except Exception as e:
         print(f"Failed to load model: {e}")
         exit(1)
 
     print("Computing Alpha158 features ...")
-    predict_dataset_conf = get_predict_conf(start_date_for_predict, latest_date)
+    predict_dataset_conf = get_predict_conf(start_date_for_predict, predict_date)
     dataset = init_instance_by_config(predict_dataset_conf)
 
     pred_score = model.predict(dataset)
 
     print("\n" + "=" * 50)
-    print(f"{latest_date} Top Predictions")
+    print(f"{predict_date} Top Predictions")
     print("=" * 50)
 
     result_df = pred_score.sort_values(ascending=False).to_frame("Score")
@@ -84,6 +135,12 @@ if __name__ == '__main__':
 
     print(result_df)
 
-    output_filename = "top_picks.csv"
-    result_df.to_csv(output_filename)
-    print(f"\nSaved to: {output_filename}")
+    default_out = Path("output") / f"top_picks_{predict_date}.csv"
+    out_path = Path(args.out) if args.out else default_out
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    result_df.to_csv(out_path)
+    print(f"\nSaved to: {out_path}")
+
+
+if __name__ == '__main__':
+    main()
