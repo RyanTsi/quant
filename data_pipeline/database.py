@@ -1,6 +1,13 @@
+"""HTTP client for the C++ data gateway (Drogon)."""
+
+import logging
+
 import requests
+from config.settings import settings
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+logger = logging.getLogger(__name__)
 
 
 class DBClient:
@@ -38,7 +45,7 @@ class DBClient:
             response = self.session.get(url, params=params, timeout=10)
             return response
         except Exception as e:
-            print(f"Query failed for {symbol}: {e}")
+            logger.error("Query failed for %s: %s", symbol, e)
             return None
 
     def query_multiple(self, symbols, start_date, end_date, limit=50000, offset=0):
@@ -54,7 +61,7 @@ class DBClient:
             response = self.session.post(url, json=body, timeout=30)
             return response
         except Exception as e:
-            print(f"Multi-symbol query failed: {e}")
+            logger.error("Multi-symbol query failed: %s", e)
             return None
 
     def query_latest(self, symbol, n=30):
@@ -64,7 +71,7 @@ class DBClient:
             response = self.session.get(url, params=params, timeout=10)
             return response
         except Exception as e:
-            print(f"Latest query failed for {symbol}: {e}")
+            logger.error("Latest query failed for %s: %s", symbol, e)
             return None
 
     def get_stats(self, symbol, start_date, end_date):
@@ -74,16 +81,18 @@ class DBClient:
             response = self.session.get(url, params=params, timeout=10)
             return response
         except Exception as e:
-            print(f"Stats query failed for {symbol}: {e}")
+            logger.error("Stats query failed for %s: %s", symbol, e)
             return None
 
     def list_symbols(self):
         url = f"{self.base_url}/symbols"
         try:
-            response = self.session.get(url, timeout=10)
+            response = self.session.get(
+                url, timeout=settings.gateway_list_symbols_timeout
+            )
             return response
         except Exception as e:
-            print(f"List symbols failed: {e}")
+            logger.error("List symbols failed: %s", e)
             return None
 
     def delete_data(self, symbol, start_date=None, end_date=None):
@@ -97,5 +106,5 @@ class DBClient:
             response = self.session.delete(url, params=params, timeout=10)
             return response
         except Exception as e:
-            print(f"Delete failed for {symbol}: {e}")
+            logger.error("Delete failed for %s: %s", symbol, e)
             return None

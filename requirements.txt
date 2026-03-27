@@ -9,7 +9,10 @@ TA-Lib==0.6.8
 
 gymnasium==1.2.3
 stable-baselines3==2.7.1
+xgboost==3.2.0
+catboost==1.2.10
 
+schedule==1.2.2
 PyYAML==6.0.3
 seaborn==0.13.2
 

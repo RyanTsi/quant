@@ -20,7 +20,7 @@ def format_stock_code(code, prefix: bool = True, uppercase: bool = True, has_dot
     else:
         return f"{digits}.{market}" if has_dot else f"{digits}{market}"
     
-# 支持的日期格式映射
+
 DATE_FORMATS = {
     "YYYY-MM-DD":   "%Y-%m-%d",
     "DD/MM/YYYY":   "%d/%m/%Y",
@@ -42,7 +42,6 @@ def format_date(date: str, format: str) -> str:
     if format not in DATE_FORMATS:
         raise ValueError(f"不支持的目标格式: '{format}'，可选: {list(DATE_FORMATS.keys())}")
 
-    # 自动尝试所有已知格式解析输入
     parsed_date = None
     for fmt_key, fmt_str in DATE_FORMATS.items():
         try:
