@@ -5,6 +5,7 @@
 ![Qlib](https://img.shields.io/badge/Qlib-0.9.7-orange)
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.x-red?logo=pytorch)
 ![TimescaleDB](https://img.shields.io/badge/TimescaleDB-PostgreSQL-green?logo=postgresql)
+![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
 End-to-end quantitative trading framework for the China A-share market. Covers daily data ingestion, time-series storage, Transformer-based alpha signal generation (via Qlib), and automated scheduling — backed by a C++ / Drogon REST gateway and TimescaleDB.
 
@@ -28,10 +29,11 @@ The system connects four stages into a repeatable daily workflow:
 
 1. **Fetch** — Pull all A-share and index daily bars from baostock (fallback: akshare), save as per-symbol CSVs.
 2. **Store** — Batch-POST the CSVs into a C++ REST gateway that upserts rows into a TimescaleDB hypertable.
-3. **Transform** — Export from DB, convert to Qlib binary format, compute Alpha158 features.
-4. **Predict** — Run a Transformer model (trained with Qlib's rolling-window workflow) to score and rank stocks.
+3. **Transform** — Export from DB, convert to Qlib binary format, and build Alpha158 features.
+4. **Modeling** — Train Transformer via Qlib workflow (MLflow tracking + signal/backtest records).
+5. **Predict + Execute** — Predict on a dynamic liquidity-based universe, then build target weights and rebalance orders.
 
-A built-in scheduler (`main.py`) orchestrates these stages on weekdays: an **evening pipeline** (fetch + ingest at 18:15) and an **afternoon pipeline** (export + dump + predict at 14:00). Individual tasks can also be triggered on demand via CLI.
+A built-in scheduler (`main.py`) orchestrates these stages on weekdays: an **evening pipeline** (fetch + ingest at 18:15) and an **afternoon pipeline** (export + dump + predict + portfolio at 14:00). Individual tasks can also be triggered on demand via CLI.
 
 ```mermaid
 graph LR
@@ -43,78 +45,24 @@ graph LR
     TS --> EXP[export_from_db]
     EXP --> DUMP[dump_to_qlib]
     DUMP --> QLIB[Qlib Transformer]
-    QLIB --> PRED[top_picks.csv]
+    QLIB --> PRED[top_picks_DATE.csv]
+    PRED --> PORT[target_weights + orders]
 ```
 
 ## Project Structure
 
-```
-quant/
-├── main.py                    # CLI & scheduler entry point
-│
-├── config/
-│   └── settings.py            # Loads .env; exposes data_path, db_host, db_port, tu_token
-│
-├── data_pipeline/
-│   ├── fetcher.py             # StockDataFetcher — baostock/akshare daily bars
-│   ├── database.py            # DBClient — HTTP wrapper for the C++ gateway
-│   └── preprocesser.py        # TA-Lib feature engineering (RSI, MACD, BBANDS, …)
-│
-├── alpha_models/
-│   ├── qlib_workflow.py       # Qlib TransformerModel + Alpha158, rolling train & backtest
-│   ├── quantTransformer.py    # Standalone PyTorch Transformer + trainer
-│   └── LSTM.py                # Bidirectional LSTM + attention (external dependency)
-│
-├── scheduler/
-│   └── tasks.py               # @task decorator, individual tasks, pipeline definitions
-│
-├── scripts/
-│   ├── update_data.py         # Incremental fetch for all stocks
-│   ├── put_data.py            # Batch-POST CSV directory to gateway
-│   ├── dump_bin.py            # CSV → Qlib binary conversion (fire CLI)
-│   ├── predict.py             # Load MLflow model, generate top picks
-│   ├── filter.py              # Top-500 liquidity filter via DB queries
-│   ├── filter_vai_csv.py      # Top-500 liquidity filter via local CSVs
-│   ├── export_today.py        # Export single-day data from DB
-│   ├── train_alpha_model.py   # Custom Transformer training (draft)
-│   └── view.py                # IC/IR & portfolio Plotly reports
-│
-├── server/
-│   ├── main.cc                # Drogon REST API — ingest, query, stats, health
-│   ├── CMakeLists.txt         # Build config (Drogon, libpqxx, nlohmann_json)
-│   ├── config.json            # Drogon runtime config (listener, DB pool)
-│   ├── sql/
-│   │   └── market_data_daily.sql  # TimescaleDB hypertable + compression policy
-│   └── docker/
-│       ├── docker-compose.yml     # TimescaleDB container
-│       └── .env.template          # DB credentials template
-│
-├── news_module/               # News sentiment (early stage)
-│   ├── service.py             # Crawl orchestrator
-│   ├── schemas.py             # Pydantic models for news items
-│   ├── repository.py          # SQLAlchemy CRUD
-│   ├── interfaces.py          # Scraper interface definition
-│   ├── models.py              # SQLAlchemy ORM model
-│   └── scrapers/
-│       ├── base.py            # Base scraper with retry + BeautifulSoup
-│       └── mock_scraper.py    # Mock scraper for testing
-│
-├── utils/
-│   ├── run_tracker.py         # JSON-based task execution history
-│   ├── format.py              # Stock code formatting & date conversion
-│   └── io.py                  # CSV / text file helpers
-│
-├── test/
-│   ├── test_run_tracker.py    # Unit tests for run tracker
-│   └── test_fetch_data_from_db.py  # Unit tests for DBClient
-│
-├── backtesting/               # Planned — empty package
-├── rl_portfolio/              # Planned — empty package
-├── docs/
-│   └── tutorials.ipynb        # Tutorial notebook
-├── .env.template              # Environment variable template
-└── requirements.txt           # Python dependencies
-```
+| Path | Purpose |
+|------|---------|
+| `main.py` | Unified CLI and scheduler entry |
+| `config/` | Environment and global runtime settings |
+| `data_pipeline/` | Fetch / ingest / export market data |
+| `alpha_models/` | Qlib training workflow and model configs |
+| `scripts/` | Standalone tools (`predict`, `filter`, `dump_bin`, `build_portfolio`, etc.) |
+| `scheduler/` | Task wrappers and pipeline orchestration |
+| `backtesting/` | Portfolio construction and execution baseline |
+| `server/` | C++ Drogon gateway + TimescaleDB deployment assets |
+| `test/` | Unit tests |
+| `docs/` | Tutorials and supplementary docs |
 
 ## Getting Started
 
@@ -186,11 +134,12 @@ python main.py --run export      # Export all symbols from DB to per-symbol CSVs
 python main.py --run dump        # Convert CSVs to Qlib binary format
 python main.py --run train       # Train Transformer via Qlib workflow
 python main.py --run predict     # Generate predictions with latest model
+python main.py --run portfolio   # Build target weights and rebalance orders
 
 # ─── Run a pipeline ─────────────────────────────────
 python main.py --run evening     # fetch → ingest
-python main.py --run afternoon   # export → dump → predict
-python main.py --run full        # fetch → ingest → dump → train → predict
+python main.py --run afternoon   # export → dump → predict → portfolio
+python main.py --run full        # fetch → ingest → export → dump → train → predict → portfolio
 
 # ─── Inspect state ──────────────────────────────────
 python main.py --status          # Print last run time + metadata for each task
@@ -206,14 +155,14 @@ All task runs are logged to `scheduler.log` and persisted to `.data/run_history.
 ### Standalone scripts
 
 ```bash
-python scripts/update_data.py              # Fetch all stock history (incremental)
-python scripts/put_data.py [data_dir]      # Ingest a CSV directory
-python scripts/dump_bin.py dump_all \
-  --csv_path=.data/db_export \
-  --qlib_dir=.data/qlib_data              # CSV → Qlib binary
-python scripts/predict.py                  # Run prediction pipeline
-python scripts/filter.py                   # Build top-500 liquidity instrument list
-python scripts/view.py                     # Generate Plotly performance reports
+python -m scripts.update_data                             # Fetch all stock history (incremental)
+python -m scripts.put_data [data_dir]                     # Ingest a CSV directory
+python scripts/dump_bin.py dump_all --data_path=.data/receive_buffer --qlib_dir=.data/qlib_data
+python -m scripts.predict --date 2026-03-25 --out output/top_picks_2026-03-25.csv
+python -m scripts.build_portfolio --date 2026-03-25
+python -m scripts.eval_test --config alpha_models/workflow_config_transformer_Alpha158.yaml
+python -m scripts.filter                                  # Build quarter-lag liquidity stock pool txt
+python -m scripts.view                                    # Generate Plotly performance reports
 ```
 
 ### Running tests
@@ -248,6 +197,15 @@ All endpoints are prefixed with `/api/v1`. The gateway buffers incoming data in 
 | `TU_TOKEN` | `config/settings.py` | TuShare API token |
 | `DB_HOST` | `config/settings.py` | C++ gateway host (default `127.0.0.1`) |
 | `DB_PORT` | `config/settings.py` | C++ gateway port (default `8080`) |
+| `GATEWAY_LIST_SYMBOLS_TIMEOUT` | `config/settings.py` | Timeout (seconds) for gateway symbol listing |
+| `PIPELINE_COOLDOWN_SECONDS` | `scheduler/pipelines.py` | Cooldown between sequential tasks |
+| `QLIB_PROVIDER_URI` | Qlib workflow / predict | Qlib data directory |
+| `QLIB_MLRUNS_URI` | Qlib workflow | MLflow tracking URI |
+| `QLIB_EXPERIMENT_NAME` | Qlib workflow | Experiment name for training runs |
+| `QLIB_WORKFLOW_CONFIG` | `alpha_models/qlib_workflow.py` | YAML config path for training |
+| `QLIB_EXPERIMENT_ID` | `scripts/predict.py`, `scripts/eval_test.py` | Optional model selector |
+| `QLIB_RECORDER_ID` | `scripts/predict.py`, `scripts/eval_test.py` | Optional model selector |
+| `QLIB_TORCH_DATALOADER_WORKERS` | workflow runner | Windows DataLoader workers override |
 | `DB_USER` | — | Reserved for future use |
 | `DB_PASSWORD` | — | Reserved for future use |
 | `DB_NAME` | — | Reserved for future use |
@@ -272,18 +230,29 @@ Drogon configuration: HTTP listener (port 8080), PostgreSQL connection pool, and
 |--------|--------|-------|
 | Data fetch (baostock/akshare) | Working | Incremental fetch, retry, ST filtering |
 | C++ gateway + TimescaleDB | Working | Upsert, query, stats, Docker deployment |
-| Scheduler & CLI | Working | Evening / afternoon pipelines, run history |
-| Qlib Transformer workflow | Working | Alpha158, rolling train, MLflow tracking |
+| Scheduler & CLI | Working | Evening / afternoon / full pipelines, run history |
+| Qlib Transformer workflow | Working | Alpha158 config-driven train, MLflow artifact save, signal metrics extraction |
+| Predict pipeline | Working | Supports `--date` / `--out`, dynamic 60-day liquidity pool + previous-day expansion to 500 |
+| Portfolio execution baseline | Working | Builds target weights and rebalance orders from predictions |
+| Test-set evaluation script | Working | `scripts/eval_test.py` computes IC/ICIR on full test segment |
 | Feature engineering (TA-Lib) | Working | 20+ features, cross-sectional z-score |
 | DB HTTP client | Working | Full CRUD, retry on GET |
 | Custom QuantTransformer | Implemented | Standalone trainer with early stopping |
 | LSTM model | Incomplete | Depends on missing `src.data_loader` |
 | News module | Early stage | Mock scraper only; missing `config` module breaks `BaseScraper` import |
-| Backtesting | Planned | Empty package; currently relies on Qlib's backtest |
+| Liquidity filter script | Working | Quarter-lag anti-lookahead selection and txt instrument output |
 | RL portfolio | Planned | Empty package; `gymnasium` + `stable-baselines3` in deps |
-| Tests | Basic | 2 test files covering run tracker and DB client |
+| Tests | Expanded | Includes config, scheduler pipeline, filter, portfolio builder, DB client, ingest/export |
 
 ## Changelog
+
+### 2026-03-26
+- Added post-prediction execution step (`portfolio`) into afternoon/full pipelines
+- Added `scripts/build_portfolio.py` + `backtesting/portfolio.py` for target weights and rebalance orders
+- Upgraded prediction universe logic: 60-day liquidity bucket sampling base pool + previous-day ranked carryover up to 500
+- Added flexible prediction/evaluation CLIs (`--date`, `--out`, test-segment evaluation)
+- Updated liquidity filter to quarter-lag sampling and txt instrument output to avoid lookahead
+- Unified environment variables in `config/settings.py` and expanded `.env.template`
 
 ### 2026-03-23
 - Added scheduler system with `@task` decorator (logging, timing, error handling)
@@ -311,4 +280,4 @@ Drogon configuration: HTTP listener (port 8080), PostgreSQL connection pool, and
 
 ## License
 
-Not yet specified.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
