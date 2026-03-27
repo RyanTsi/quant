@@ -52,6 +52,19 @@ def predict():
     record_run("predict", date=today_dash())
 
 
+@task("build_portfolio")
+def build_portfolio():
+    """Build target weights and orders from prediction picks."""
+    import subprocess
+    import sys
+
+    subprocess.run(
+        [sys.executable, "-m", "scripts.build_portfolio"],
+        check=True,
+    )
+    record_run("build_portfolio", date=today_dash())
+
+
 @task("train_model")
 def train_model():
     """Train the Transformer model via Qlib workflow."""

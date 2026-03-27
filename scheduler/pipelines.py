@@ -3,7 +3,7 @@ import time
 from datetime import datetime
 
 from scheduler.data_tasks import fetch_data, ingest_to_db, export_from_db
-from scheduler.model_tasks import dump_to_qlib, predict, train_model
+from scheduler.model_tasks import dump_to_qlib, predict, train_model, build_portfolio
 from scheduler.decorator import TaskFailed
 from config.settings import settings
 
@@ -20,6 +20,7 @@ AFTERNOON_PIPELINE = [
     export_from_db,
     dump_to_qlib,
     predict,
+    build_portfolio,
 ]
 
 # TODO: Weekly retrain pipeline — schedule for e.g. Saturday 02:00
@@ -42,6 +43,7 @@ FULL_PIPELINE = [
     dump_to_qlib,
     train_model,
     predict,
+    build_portfolio,
 ]
 
 

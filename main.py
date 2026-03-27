@@ -12,6 +12,7 @@ Usage:
     python main.py --run dump
     python main.py --run train
     python main.py --run predict
+    python main.py --run portfolio
     python main.py --status            # Show last run status for all tasks
 """
 
@@ -85,7 +86,7 @@ def run_scheduler():
 
 def run_once(task_name: str):
     from scheduler.data_tasks import fetch_data, ingest_to_db, export_from_db
-    from scheduler.model_tasks import dump_to_qlib, train_model, predict
+    from scheduler.model_tasks import dump_to_qlib, train_model, predict, build_portfolio
     from scheduler.pipelines import (
         EVENING_PIPELINE, AFTERNOON_PIPELINE, FULL_PIPELINE,
         run_pipeline,
@@ -98,6 +99,7 @@ def run_once(task_name: str):
         "dump":    dump_to_qlib,
         "train":   train_model,
         "predict": predict,
+        "portfolio": build_portfolio,
     }
 
     pipeline_map = {
@@ -139,7 +141,7 @@ def main():
     parser = argparse.ArgumentParser(description="Quant System Scheduler")
     parser.add_argument("--run", type=str, metavar="TASK",
                         help="Run a task/pipeline once: evening, afternoon, full, "
-                             "fetch, ingest, export, dump, train, predict")
+                             "fetch, ingest, export, dump, train, predict, portfolio")
     parser.add_argument("--status", action="store_true",
                         help="Show last run status for all tasks")
     args = parser.parse_args()

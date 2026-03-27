@@ -42,7 +42,7 @@ class Settings:
             f"file:///{os.path.join(BASE_DIR, 'mlruns').replace(os.sep, '/')}",
         )
         self.qlib_experiment_name = os.getenv('QLIB_EXPERIMENT_NAME', 'transformer_alpha158')
-        self.qlib_recorder_id = os.getenv('QLIB_RECORDER_ID', '26026d1687f344f4971fa15df7d0734d')
+        self.qlib_recorder_id = os.getenv('QLIB_RECORDER_ID', 'd0ca701f21c94c169d1a2b9b29c8bf40')
         self.qlib_experiment_id = os.getenv('QLIB_EXPERIMENT_ID', '381621146439577988')
         self.qlib_workflow_config = os.getenv(
             "QLIB_WORKFLOW_CONFIG",

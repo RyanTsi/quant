@@ -7,6 +7,7 @@ Usage:
 """
 
 import argparse
+import random
 import os
 from pathlib import Path
 
@@ -21,7 +22,7 @@ from config.settings import settings
 from utils.run_tracker import get_last_run
 
 
-def get_predict_conf(start_date, end_date):
+def get_predict_conf(start_date, end_date, instruments):
     return {
         "class": "TSDatasetH",
         "module_path": "qlib.data.dataset",
@@ -34,7 +35,7 @@ def get_predict_conf(start_date, end_date):
                     "end_time": end_date,
                     "fit_start_time": start_date,
                     "fit_end_time": end_date,
-                    "instruments": "top_500_liquidity_stocks",
+                    "instruments": instruments,
                     "infer_processors": [
                         {"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}},
                         {"class": "Fillna", "kwargs": {"fields_group": "feature"}}
@@ -74,6 +75,81 @@ def _lookback_start(calendar, end_date: str, lookback: int = 120) -> str:
     return cal_str[start_idx]
 
 
+def _trading_index(calendar, target_date: str) -> int:
+    cal_str = [pd.Timestamp(x).strftime("%Y-%m-%d") for x in calendar]
+    return cal_str.index(pd.Timestamp(target_date).strftime("%Y-%m-%d"))
+
+
+def _build_today_pool(calendar, predict_date: str, seed: int = 42) -> list[str]:
+    idx = _trading_index(calendar, predict_date)
+    lookback_start_idx = max(0, idx - 59)
+    start = pd.Timestamp(calendar[lookback_start_idx]).strftime("%Y-%m-%d")
+    end = pd.Timestamp(calendar[idx]).strftime("%Y-%m-%d")
+
+    # Liquidity ranking in last 60 trading days.
+    feats = D.features(D.instruments("all"), ["$amount", "$close", "$volume"], start_time=start, end_time=end)
+    if feats.empty:
+        raise RuntimeError("No feature data available to build prediction pool.")
+
+    amount = pd.to_numeric(feats.get("$amount"), errors="coerce")
+    if amount is None or amount.isna().all():
+        close = pd.to_numeric(feats.get("$close"), errors="coerce").fillna(0)
+        volume = pd.to_numeric(feats.get("$volume"), errors="coerce").fillna(0)
+        liquidity = (close * volume).fillna(0)
+    else:
+        liquidity = amount.fillna(0)
+
+    ranked = (
+        pd.DataFrame({"liq": liquidity})
+        .groupby(level="instrument")["liq"]
+        .sum()
+        .sort_values(ascending=False)
+        .head(1000)
+        .index
+        .tolist()
+    )
+
+    # Segment sampling: 1000 -> 10*100, remove top/bottom 10%, sample 40 each segment.
+    rng = random.Random(seed)
+    selected = []
+    segment_size = 100
+    for i in range(10):
+        seg = ranked[i * segment_size : (i + 1) * segment_size]
+        if len(seg) < 20:
+            continue
+        cut = max(1, int(len(seg) * 0.1))
+        middle = seg[cut : len(seg) - cut]
+        k = min(40, len(middle))
+        if k > 0:
+            selected.extend(rng.sample(middle, k))
+    base_pool = list(dict.fromkeys(selected))
+    selected_set = set(base_pool)
+
+    # Expand from previous trading day prediction until total pool reaches 500.
+    if idx > 0:
+        prev_date = pd.Timestamp(calendar[idx - 1]).strftime("%Y-%m-%d")
+        prev_file = Path("output") / f"top_picks_{prev_date}.csv"
+        if prev_file.exists():
+            prev_df = pd.read_csv(prev_file)
+            if "instrument" in prev_df.columns and "Score" in prev_df.columns and not prev_df.empty:
+                need = max(0, 500 - len(selected_set))
+                if need > 0:
+                    prev_ranked = (
+                        prev_df.sort_values("Score", ascending=False)["instrument"]
+                        .astype(str)
+                        .tolist()
+                    )
+                    for sym in prev_ranked:
+                        if sym in selected_set:
+                            continue
+                        selected_set.add(sym)
+                        need -= 1
+                        if need <= 0:
+                            break
+
+    return sorted(selected_set)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Predict for a given local trading day")
     parser.add_argument("--date", type=str, default=None, help="Target trading day (YYYY-MM-DD). Default: latest.")
@@ -86,9 +162,11 @@ def main():
     predict_date = _resolve_predict_date(all_calendar, args.date)
     # ~120 trading days lookback for Alpha158 indicator warm-up
     start_date_for_predict = _lookback_start(all_calendar, predict_date, lookback=120)
+    pool_symbols = _build_today_pool(all_calendar, predict_date, seed=42)
 
     print(f"Predict date:       {predict_date}")
     print(f"Lookback start:     {start_date_for_predict}")
+    print(f"Pool size:          {len(pool_symbols)}")
 
     print("Loading model from MLflow...")
     try:
@@ -121,7 +199,7 @@ def main():
         exit(1)
 
     print("Computing Alpha158 features ...")
-    predict_dataset_conf = get_predict_conf(start_date_for_predict, predict_date)
+    predict_dataset_conf = get_predict_conf(start_date_for_predict, predict_date, instruments=pool_symbols)
     dataset = init_instance_by_config(predict_dataset_conf)
 
     pred_score = model.predict(dataset)
