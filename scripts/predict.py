@@ -19,6 +19,13 @@ from qlib.config import REG_CN
 from qlib.utils import init_instance_by_config
 
 from config.settings import settings
+from utils.preprocess import (
+    ALPHA158_WEIGHTED_5D_LABEL,
+    compute_liquidity,
+    exclude_symbols,
+    read_symbol_list,
+    sample_ranked_symbols,
+)
 from utils.run_tracker import get_last_run
 
 
@@ -44,7 +51,7 @@ def get_predict_conf(start_date, end_date, instruments):
                         {"class": "DropnaLabel"},
                         {"class": "CSRankNorm", "kwargs": {"fields_group": "label"}}
                     ],
-                    "label": ["(Ref($close, -2)/Ref($close, -1) - 1 + Ref($close, -3)/Ref($close, -1) - 1 + Ref($close, -4)/Ref($close, -1) - 1 + Ref($close, -5)/Ref($close, -1) - 1 + Ref($close, -6)/Ref($close, -1) - 1) / 5"]
+                    "label": [ALPHA158_WEIGHTED_5D_LABEL]
                 },
             },
             "segments": {
@@ -81,48 +88,51 @@ def _trading_index(calendar, target_date: str) -> int:
 
 
 def _build_today_pool(calendar, predict_date: str, seed: int = 42) -> list[str]:
+    index_symbols = read_symbol_list(Path(settings.data_path) / "index_code_list")
     idx = _trading_index(calendar, predict_date)
     lookback_start_idx = max(0, idx - 59)
     start = pd.Timestamp(calendar[lookback_start_idx]).strftime("%Y-%m-%d")
     end = pd.Timestamp(calendar[idx]).strftime("%Y-%m-%d")
 
     # Liquidity ranking in last 60 trading days.
-    feats = D.features(D.instruments("all"), ["$amount", "$close", "$volume"], start_time=start, end_time=end)
+    feats = D.features(D.instruments("all"), ["$amount", "$close", "$volume", "$isst"], start_time=start, end_time=end)
     if feats.empty:
         raise RuntimeError("No feature data available to build prediction pool.")
 
-    amount = pd.to_numeric(feats.get("$amount"), errors="coerce")
-    if amount is None or amount.isna().all():
-        close = pd.to_numeric(feats.get("$close"), errors="coerce").fillna(0)
-        volume = pd.to_numeric(feats.get("$volume"), errors="coerce").fillna(0)
-        liquidity = (close * volume).fillna(0)
-    else:
-        liquidity = amount.fillna(0)
+    liquidity = compute_liquidity(feats, amount_col="$amount", close_col="$close", volume_col="$volume")
+    st_symbols: set[str] = set()
+    if "$isst" in feats.columns:
+        is_st = pd.to_numeric(feats["$isst"], errors="coerce").fillna(0)
+        if isinstance(is_st.index, pd.MultiIndex) and "instrument" in is_st.index.names:
+            # Exclude symbols marked ST on the latest available bar in lookback.
+            latest = is_st.groupby(level="instrument").last()
+            st_symbols = {str(sym) for sym, val in latest.items() if float(val) != 0.0}
 
-    ranked = (
+    ranked_all = (
         pd.DataFrame({"liq": liquidity})
         .groupby(level="instrument")["liq"]
         .sum()
         .sort_values(ascending=False)
-        .head(1000)
         .index
         .tolist()
     )
+    excluded_symbols = set(index_symbols) | st_symbols
+    ranked = exclude_symbols(ranked_all, excluded_symbols)[:1000]
 
     # Segment sampling: 1000 -> 10*100, remove top/bottom 10%, sample 40 each segment.
     rng = random.Random(seed)
-    selected = []
-    segment_size = 100
-    for i in range(10):
-        seg = ranked[i * segment_size : (i + 1) * segment_size]
-        if len(seg) < 20:
-            continue
-        cut = max(1, int(len(seg) * 0.1))
-        middle = seg[cut : len(seg) - cut]
-        k = min(40, len(middle))
-        if k > 0:
-            selected.extend(rng.sample(middle, k))
-    base_pool = list(dict.fromkeys(selected))
+    base_pool = sample_ranked_symbols(
+        ranked,
+        segment_count=10,
+        segment_size=100,
+        sample_per_segment=40,
+        trim_ratio=0.1,
+        min_segment_size=20,
+        rng=rng,
+    )
+    # Small-universe fallback: if segment sampling is too strict, keep top-ranked symbols directly.
+    if not base_pool:
+        base_pool = ranked[: min(500, len(ranked))]
     selected_set = set(base_pool)
 
     # Expand from previous trading day prediction until total pool reaches 500.
@@ -139,6 +149,7 @@ def _build_today_pool(calendar, predict_date: str, seed: int = 42) -> list[str]:
                         .astype(str)
                         .tolist()
                     )
+                    prev_ranked = exclude_symbols(prev_ranked, excluded_symbols)
                     for sym in prev_ranked:
                         if sym in selected_set:
                             continue
@@ -157,6 +168,8 @@ def main():
     args = parser.parse_args()
 
     qlib.init(provider_uri=settings.qlib_provider_uri, region=REG_CN)
+    if settings.qlib_mlruns_uri:
+        R.set_uri(settings.qlib_mlruns_uri)
 
     all_calendar = D.calendar(freq='day')
     predict_date = _resolve_predict_date(all_calendar, args.date)

@@ -161,7 +161,7 @@ python scripts/dump_bin.py dump_all --data_path=.data/receive_buffer --qlib_dir=
 python -m scripts.predict --date 2026-03-25 --out output/top_picks_2026-03-25.csv
 python -m scripts.build_portfolio --date 2026-03-25
 python -m scripts.eval_test --config alpha_models/workflow_config_transformer_Alpha158.yaml
-python -m scripts.filter                                  # Build quarter-lag liquidity stock pool txt
+python -m scripts.filter                                  # Build month-lag liquidity stock pool txt
 python -m scripts.view                                    # Generate Plotly performance reports
 ```
 
@@ -240,11 +240,22 @@ Drogon configuration: HTTP listener (port 8080), PostgreSQL connection pool, and
 | Custom QuantTransformer | Implemented | Standalone trainer with early stopping |
 | LSTM model | Incomplete | Depends on missing `src.data_loader` |
 | News module | Early stage | Mock scraper only; missing `config` module breaks `BaseScraper` import |
-| Liquidity filter script | Working | Quarter-lag anti-lookahead selection and txt instrument output |
+| Liquidity filter script | Working | Month-lag anti-lookahead selection and txt instrument output |
 | RL portfolio | Planned | Empty package; `gymnasium` + `stable-baselines3` in deps |
 | Tests | Expanded | Includes config, scheduler pipeline, filter, portfolio builder, DB client, ingest/export |
 
 ## Changelog
+
+### 2026-04-01
+- Excluded ST stocks in training-universe generation (`scripts/filter.py`): month samples sourced from ST periods are now dropped.
+- Excluded ST stocks in prediction pool (`scripts/predict.py`) using `$isst`, including previous-day carryover expansion.
+- Changed training stock-pool refresh cadence from quarter-lag to month-lag while preserving anti-lookahead behavior.
+- Training pool ranking now uses past-quarter liquidity stability; removes top/bottom 5% volatility symbols; keeps 10-group selection with non-uniform top-heavy quotas and per-group minimum coverage.
+
+### 2026-03-31
+- Refactored shared pool preprocessing helpers into `utils/preprocess.py` and reused them in both `scripts/filter.py` and `scripts/predict.py`
+- Prediction pool now excludes symbols listed in `.data/index_code_list` (including previous-day carryover expansion)
+- Aligned prediction Alpha158 label expression with the training workflow label
 
 ### 2026-03-26
 - Added post-prediction execution step (`portfolio`) into afternoon/full pipelines

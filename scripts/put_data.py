@@ -1,23 +1,31 @@
-"""CLI wrapper: ingest CSV files into the data gateway.
+"""CLI wrapper: ingest CSV data into the C++ gateway."""
 
-Usage:
-    python -m scripts.put_data [DATA_DIR]
-"""
+from __future__ import annotations
 
-import os
-import sys
+import argparse
 
-from config.settings import settings
 from data_pipeline.ingest import ingest_directory
+from quantcore.settings import get_settings
 
 
-if __name__ == "__main__":
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Ingest CSV data to gateway")
+    parser.add_argument("--data_dir", type=str, default=None, help="CSV directory. Default: .data/send_buffer")
+    parser.add_argument(
+        "--delete_after_ingest",
+        action="store_true",
+        help="Delete local CSV files after successful ingest.",
+    )
+    args = parser.parse_args()
+
+    settings = get_settings(refresh=True)
     server_url = f"http://{settings.db_host}:{settings.db_port}"
-    data_dir = os.path.join(settings.data_path, "20260312-20260324")
-
-    if len(sys.argv) > 1:
-        data_dir = sys.argv[1]
+    data_dir = args.data_dir or settings.send_buffer_path
 
     print(f"Server: {server_url}")
     print(f"Data:   {data_dir}")
-    ingest_directory(server_url, data_dir)
+    ingest_directory(server_url, data_dir, delete_after_ingest=args.delete_after_ingest)
+
+
+if __name__ == "__main__":
+    main()

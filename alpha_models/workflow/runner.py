@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Tuple
@@ -14,6 +13,7 @@ class LoadedWorkflowConfig:
     market: str
     benchmark: str
     task: Dict[str, Any]
+    config_source: str = "inline"
 
 
 @dataclass(frozen=True)
@@ -77,12 +77,58 @@ class QlibWorkflowRunner:
         for f in files:
             merged = _deep_merge_dict(merged, cls._load_yaml_file(f))
 
+        return cls.load_dict_config(merged, source_label=source_label)
+
+    @classmethod
+    def load_dict_config(cls, config: Dict[str, Any], *, source_label: str = "python_config") -> LoadedWorkflowConfig:
         return LoadedWorkflowConfig(
-            qlib_init=merged.get("qlib_init") or {},
-            market=merged.get("market") or "all",
-            benchmark=merged.get("benchmark") or "",
-            task=merged.get("task") or {},
+            qlib_init=config.get("qlib_init") or {},
+            market=config.get("market") or "all",
+            benchmark=config.get("benchmark") or "",
+            task=config.get("task") or {},
+            config_source=source_label,
         )
+
+    @classmethod
+    def compose_config(
+        cls,
+        *,
+        config_source: Optional[str] = None,
+        config: Optional[Dict[str, Any] | LoadedWorkflowConfig] = None,
+        config_overrides: Optional[Dict[str, Any]] = None,
+        source_label: str = "python_config",
+    ) -> LoadedWorkflowConfig:
+        """
+        Compose runtime config from either YAML source or in-memory dict/config object.
+        This makes workflow control possible directly from Python code.
+        """
+        if config_source and config is not None:
+            raise ValueError("Specify only one of `config_source` or `config`.")
+        if not config_source and config is None:
+            raise ValueError("Either `config_source` or `config` must be provided.")
+
+        if config_source:
+            loaded = cls.load_yaml_config(config_source)
+        elif isinstance(config, LoadedWorkflowConfig):
+            loaded = config
+        else:
+            if not isinstance(config, dict):
+                raise TypeError("`config` must be a dict or LoadedWorkflowConfig.")
+            loaded = cls.load_dict_config(dict(config or {}), source_label=source_label)
+
+        if not config_overrides:
+            return loaded
+
+        merged = _deep_merge_dict(
+            {
+                "qlib_init": dict(loaded.qlib_init or {}),
+                "market": loaded.market,
+                "benchmark": loaded.benchmark,
+                "task": dict(loaded.task or {}),
+            },
+            config_overrides,
+        )
+        return cls.load_dict_config(merged, source_label=f"{loaded.config_source}+override")
 
     @staticmethod
     def _as_date_str(dt: Any) -> str:
@@ -147,6 +193,55 @@ class QlibWorkflowRunner:
         self,
         *,
         config_source: str,
+        config_overrides: Optional[Dict[str, Any]] = None,
+        task_overrides: Optional[Dict[str, Any]] = None,
+        qlib_init_overrides: Optional[Dict[str, Any]] = None,
+        provider_uri_override: Optional[str] = None,
+        mlruns_uri: Optional[str] = None,
+        experiment_name: Optional[str] = None,
+    ) -> TrainResult:
+        loaded = self.compose_config(config_source=config_source, config_overrides=config_overrides)
+        return self.run(
+            loaded_config=loaded,
+            task_overrides=task_overrides,
+            qlib_init_overrides=qlib_init_overrides,
+            provider_uri_override=provider_uri_override,
+            mlruns_uri=mlruns_uri,
+            experiment_name=experiment_name,
+        )
+
+    def run_from_config(
+        self,
+        *,
+        config: Dict[str, Any] | LoadedWorkflowConfig,
+        source_label: str = "python_config",
+        config_overrides: Optional[Dict[str, Any]] = None,
+        task_overrides: Optional[Dict[str, Any]] = None,
+        qlib_init_overrides: Optional[Dict[str, Any]] = None,
+        provider_uri_override: Optional[str] = None,
+        mlruns_uri: Optional[str] = None,
+        experiment_name: Optional[str] = None,
+    ) -> TrainResult:
+        loaded = self.compose_config(
+            config=config,
+            source_label=source_label,
+            config_overrides=config_overrides,
+        )
+        return self.run(
+            loaded_config=loaded,
+            task_overrides=task_overrides,
+            qlib_init_overrides=qlib_init_overrides,
+            provider_uri_override=provider_uri_override,
+            mlruns_uri=mlruns_uri,
+            experiment_name=experiment_name,
+        )
+
+    def run(
+        self,
+        *,
+        loaded_config: LoadedWorkflowConfig,
+        task_overrides: Optional[Dict[str, Any]] = None,
+        qlib_init_overrides: Optional[Dict[str, Any]] = None,
         provider_uri_override: Optional[str] = None,
         mlruns_uri: Optional[str] = None,
         experiment_name: Optional[str] = None,
@@ -155,42 +250,33 @@ class QlibWorkflowRunner:
         from qlib.utils import init_instance_by_config
         from qlib.workflow import R
 
-        loaded = self.load_yaml_config(config_source)
-        qlib_init = dict(loaded.qlib_init or {})
+        qlib_init = dict(loaded_config.qlib_init or {})
+        if qlib_init_overrides:
+            qlib_init = _deep_merge_dict(qlib_init, qlib_init_overrides)
 
         provider_uri = provider_uri_override or qlib_init.get("provider_uri")
         if provider_uri is not None:
             qlib_init["provider_uri"] = self._expand_provider_uri(str(provider_uri))
 
         qlib.init(**qlib_init)
-
         if mlruns_uri:
             R.set_uri(mlruns_uri)
 
+        task_cfg = dict(loaded_config.task or {})
+        if task_overrides:
+            task_cfg = _deep_merge_dict(task_cfg, task_overrides)
+        if "model" not in task_cfg or "dataset" not in task_cfg:
+            raise ValueError("task config must contain both `model` and `dataset`.")
+
         exp_name = experiment_name or "qlib_workflow"
         with R.start(experiment_name=exp_name):
-            model_cfg = dict(loaded.task["model"])
-            model_kwargs = dict(model_cfg.get("kwargs") or {})
-
-            # YAML compatibility: some configs use `nhead` but Qlib uses `n_head`.
-            if "nhead" in model_kwargs and "n_head" not in model_kwargs:
-                model_kwargs["n_head"] = model_kwargs.pop("nhead")
-
-            # Windows reliability: default to single-process workers unless explicitly overridden.
-            if os.name == "nt" and model_cfg.get("class") == "TransformerModel" and "n_jobs" in model_kwargs:
-                from config.settings import settings
-                override = settings.qlib_torch_dataloader_workers
-                model_kwargs["n_jobs"] = int(override) if override is not None else 0
-
-            model_cfg["kwargs"] = model_kwargs
-
-            model = init_instance_by_config(model_cfg)
-            dataset = init_instance_by_config(loaded.task["dataset"])
+            model = init_instance_by_config(dict(task_cfg["model"]))
+            dataset = init_instance_by_config(dict(task_cfg["dataset"]))
             model.fit(dataset)
             R.save_objects(trained_model=model)
 
             rec = R.get_recorder()
-            for rec_cfg in loaded.task.get("record", []):
+            for rec_cfg in task_cfg.get("record", []):
                 kwargs = dict(rec_cfg.get("kwargs") or {})
                 kwargs = {
                     k: (model if v == "<MODEL>" else dataset if v == "<DATASET>" else v)
@@ -199,7 +285,6 @@ class QlibWorkflowRunner:
                 if rec_cfg.get("class") == "PortAnaRecord" and isinstance(kwargs.get("config"), dict):
                     kwargs["config"] = self._patch_port_ana_config_for_calendar(kwargs["config"])
                 kwargs["recorder"] = rec
-
                 record = init_instance_by_config(
                     {"class": rec_cfg["class"], "module_path": rec_cfg["module_path"], "kwargs": kwargs}
                 )
@@ -211,6 +296,6 @@ class QlibWorkflowRunner:
                 experiment_id=str(rec.experiment_id),
                 recorder_id=str(rec.id),
                 metrics=metrics,
-                config_source=str(config_source),
+                config_source=loaded_config.config_source,
             )
 

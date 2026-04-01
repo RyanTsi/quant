@@ -60,7 +60,9 @@ class StockDataFetcher:
             frequency="d", adjustflag=adjustflag,
         )
         if rs.error_code == '0':
-            return rs.get_data()
+            df = rs.get_data()
+            df = self.rename_and_clean_df_columns(df)
+            return df
         return pd.DataFrame()
 
     def fetch_list_stock_history(self, stock_code_list: list, start_date: str, end_date: str, save_dir: str = None):

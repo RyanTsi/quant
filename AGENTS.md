@@ -5,6 +5,7 @@ Read these first, in order:
 - `README.md`
 - `ARCHITECTURE.md`
 - `docs/index.md`
+- `docs/NAVIGATION.md`
 - `docs/design-docs/*`
 - `docs/product-specs/*`
 - `docs/exec-plans/active/*`
@@ -13,6 +14,12 @@ Read these first, in order:
 If docs and code disagree:
 - trust the current code + tests for behavior
 - update the docs in the same change
+
+## Navigation-first rule
+- `docs/NAVIGATION.md` and `docs/navigation-docs/*` define the active documentation routing and execution rules.
+- `docs/NAVIGATION.md` defines **how the rule system executes**.
+- `docs/navigation-docs/*` is the **content layer for module navigation and workstream status**.
+- For task execution, follow the navigation graph and procedure described in `docs/NAVIGATION.md` before reading lower-priority docs.
 
 ## Working rules
 - Make the smallest change that satisfies the task.

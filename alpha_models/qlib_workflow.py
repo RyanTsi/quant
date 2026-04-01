@@ -12,6 +12,11 @@ from utils.run_tracker import record_run
 def _default_config_path() -> str:
     return str(Path("alpha_models/workflow_config_transformer_Alpha158.yaml"))
 
+def _run_post_train_view(experiment_id: str, recorder_id: str) -> None:
+    from scripts.view import generate_view
+
+    generate_view(experiment_id=experiment_id, recorder_id=recorder_id)
+
 
 def main() -> None:
     config_source = settings.qlib_workflow_config or _default_config_path()
@@ -43,6 +48,8 @@ def main() -> None:
             }
         )
     record_run("qlib_train", **payload)
+    # Always generate visualization right after successful training.
+    _run_post_train_view(result.experiment_id, result.recorder_id)
 
 
 if __name__ == "__main__":

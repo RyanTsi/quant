@@ -1,22 +1,16 @@
-from data_pipeline.fetcher import StockDataFetcher
-from utils.run_tracker import record_run, get_last_run, today
+"""CLI wrapper: fetch latest stock/index data and package chunks."""
+
+from __future__ import annotations
+
+from quantcore.factory import build_data_service
 
 
-def main():
-    data_fetcher = StockDataFetcher()
-
-    last = get_last_run("fetch_stock")
-    start_date = last.get("end_date", "20100101") if last else "20100101"
-    end_date = today()
-
-    print(f"Fetching data: {start_date} -> {end_date}")
-    
-    data_fetcher.fetch_all_stock_history(start_date, end_date)
-    data_fetcher.fetch_all_index_history(start_date, end_date)
-
-    record_run("fetch_stock", start_date=start_date, end_date=end_date)
-    print(f"Done. Run recorded: fetch_stock -> {end_date}")
+def main() -> None:
+    service = build_data_service(refresh_settings=True)
+    result = service.fetch_data(lookback_days=7)
+    print(f"Fetched {result['start_date']} -> {result['end_date']}")
+    print(f"Packed data directory: {result['save_dir']}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
