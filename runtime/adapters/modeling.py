@@ -12,14 +12,19 @@ from backtesting.portfolio import (
     build_target_weights,
     summarize_orders,
 )
+from data_pipeline.database import DBClient
 from model_function.universe import (
     HOLDING_BUFFER_DEFAULTS,
     PREDICTION_UNIVERSE_DEFAULTS,
+    TRAINING_UNIVERSE_DEFAULTS,
     apply_portfolio_hold_buffer,
+    build_training_universe_artifact,
     build_prediction_pool_from_features,
+    resolve_training_universe_output_path,
 )
 from runtime.config import get_settings
 from runtime.runlog import get_last_run, record_run
+import utils.io as io_utils
 from utils.preprocess import (
     ALPHA158_WEIGHTED_5D_LABEL,
     read_symbol_list,
@@ -69,6 +74,64 @@ def dump_to_qlib_data(
     )
     dumper.dump()
     return {"csv_dir": str(csv_dir), "qlib_dir": str(qlib_dir)}
+
+
+def _load_training_rows(
+    db_client: DBClient,
+    symbol: str,
+    *,
+    query_start: str,
+    query_end: str,
+) -> list[dict]:
+    """Fetch one symbol's daily rows and normalize failed responses to an empty list."""
+
+    response = db_client.query_data(symbol, query_start, query_end)
+    if response is None or getattr(response, "status_code", None) != 200:
+        return []
+    payload = response.json() or {}
+    rows = payload.get("data", [])
+    if not isinstance(rows, list):
+        return []
+    return rows
+
+
+def build_training_universe_file(
+    *,
+    start_year: int = 2010,
+    end_year: int = 2026,
+    top_n: int = TRAINING_UNIVERSE_DEFAULTS.exit_limit,
+    random_seed: int = TRAINING_UNIVERSE_DEFAULTS.seed,
+    data_path: str | Path | None = None,
+    qlib_dir: str | Path | None = None,
+    db_host: str | None = None,
+    db_port: int | None = None,
+) -> dict[str, Any]:
+    """Build the training-universe instrument file through the shared model helper."""
+
+    data_root = Path(data_path) if data_path is not None else Path(settings.data_path)
+    qlib_root = Path(qlib_dir) if qlib_dir is not None else Path(settings.qlib_data_path)
+    output_path = resolve_training_universe_output_path(data_path=data_root, qlib_data_path=qlib_root)
+    all_stock_list = io_utils.read_file_lines(str(data_root / "stock_code_list"))
+    index_symbols = read_symbol_list(data_root / "index_code_list")
+    client = DBClient(db_host or settings.db_host, db_port or settings.db_port)
+    query_start = f"{int(start_year)}-01-01"
+    query_end = pd.Timestamp(f"{int(end_year)}-12-31").strftime("%Y-%m-%d")
+
+    return build_training_universe_artifact(
+        symbols=all_stock_list,
+        fetch_symbol_rows=lambda symbol: _load_training_rows(
+            client,
+            symbol,
+            query_start=query_start,
+            query_end=query_end,
+        ),
+        output_path=output_path,
+        start_year=start_year,
+        end_year=end_year,
+        top_n=top_n,
+        random_seed=random_seed,
+        excluded_symbols=set(index_symbols),
+    )
 
 
 def get_predict_conf(start_date, end_date, instruments):

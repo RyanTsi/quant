@@ -87,6 +87,15 @@ compatibility cleanup completed on 2026-04-02.
   - `ModelPipelineService.dump_to_qlib()` returns `None` if `.data/receive_buffer/` is missing or empty
   - successful runs record `dump_to_qlib` history with `csv_dir` and `qlib_dir`
 
+### Filter
+
+- Entry points: `main.py --run filter`, `python -m scripts.filter`
+- Canonical logic: `runtime/services.ModelPipelineService.build_training_universe()` -> `runtime/adapters/modeling.build_training_universe_file()` -> `model_function/universe.py`
+- Important behavior:
+  - `scripts/filter.py` is a thin wrapper and no longer owns the main training-universe implementation
+  - the runtime-managed path writes the canonical instrument artifact under `qlib_data/instruments/my_800_stocks.txt`
+  - successful runs record `filter_training_universe` history with the input parameters, output path, effective end date, month count, and unique-symbol count for the merged artifact
+
 ### Train
 
 - Entry point: `main.py --run train`
@@ -122,6 +131,7 @@ python main.py --run fetch
 python main.py --run ingest
 python main.py --run export
 python main.py --run dump
+python main.py --run filter
 python main.py --run train
 python main.py --run predict
 python main.py --run portfolio
@@ -131,6 +141,7 @@ python main.py --run full
 python -m scripts.update_data
 python -m scripts.put_data --data_dir /path/to/csvs
 python -m scripts.dump_bin dump_all --data_path=.data/receive_buffer --qlib_dir=.data/qlib_data
+python -m scripts.filter --start_year 2010 --end_year 2026 --top_n 2200 --random_seed 42
 python -m scripts.predict --date 2026-04-01 --out output/top_picks_2026-04-01.csv
 python -m scripts.build_portfolio --date 2026-04-01
 python -m scripts.eval_test --config alpha_models/workflow_config_transformer_Alpha158.yaml

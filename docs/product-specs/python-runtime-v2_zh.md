@@ -18,7 +18,7 @@
 - `--run evening`
 - `--run afternoon`
 - `--run full`
-- `--run fetch|ingest|export|dump|train|predict|portfolio`
+- `--run fetch|ingest|export|dump|filter|train|predict|portfolio`
 - `--status`
 
 ### 脚本兼容性
@@ -73,6 +73,6 @@
 1. 现有 CLI 契约仍可用。
 2. 新架构模块（`runtime/*`）已进入主运行路径。
 3. 原先由兼容层持有的数据/模型 service、配置访问与运行历史辅助能力，已直接由 `runtime.services`、`runtime.config` 与 `runtime.runlog` 持有。
-4. `fetch`、`ingest`、`export`、`dump`、`predict`、`portfolio` 的工作流逻辑已由 runtime adapters 持有。
+4. `fetch`、`ingest`、`export`、`dump`、`filter`、`predict`、`portfolio` 的工作流逻辑已由 runtime 统一管理。
 5. `conda quant` 环境下全量测试通过。
 6. 中英文文档与实际实现一致，并提供可实际使用的 runtime guide。

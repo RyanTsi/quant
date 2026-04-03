@@ -111,6 +111,40 @@ class TestModelPipelineService(unittest.TestCase):
         self.assertEqual(portfolio_entry["orders_file"], "output/orders_2026-04-01.csv")
         self.assertEqual(portfolio_entry["turnover"], 0.1)
 
+    @patch("runtime.services.modeling.build_training_universe_file")
+    def test_build_training_universe_uses_direct_adapter(self, mock_build):
+        mock_build.return_value = {
+            "output_path": "output/my_800_stocks.txt",
+            "start_year": 2011,
+            "end_year": 2020,
+            "top_n": 1800,
+            "random_seed": 9,
+            "effective_end": "2026-04-03",
+            "source_month_count": 3,
+            "range_count": 10,
+            "symbol_count": 1200,
+        }
+
+        result = self.service.build_training_universe(start_year=2011, end_year=2020, top_n=1800, random_seed=9)
+
+        mock_build.assert_called_once_with(
+            start_year=2011,
+            end_year=2020,
+            top_n=1800,
+            random_seed=9,
+            data_path=self.settings.data_path,
+            qlib_dir=self.settings.qlib_data_path,
+            db_host=self.settings.db_host,
+            db_port=self.settings.db_port,
+        )
+        self.assertEqual(result["output_path"], "output/my_800_stocks.txt")
+        history_entry = self.history.get("filter_training_universe")
+        self.assertIsNotNone(history_entry)
+        self.assertEqual(history_entry["output_path"], "output/my_800_stocks.txt")
+        self.assertEqual(history_entry["top_n"], 1800)
+        self.assertEqual(history_entry["random_seed"], 9)
+        self.assertEqual(history_entry["symbol_count"], 1200)
+
     def test_model_service_module_has_no_subprocess_dependency(self):
         self.assertFalse(hasattr(model_service_module, "subprocess"))
 

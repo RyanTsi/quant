@@ -51,7 +51,8 @@ This document freezes the incumbent universe behavior and the redesigned contrac
   - new names may enter only from the entry band
   - prior training members may remain only while they stay inside the exit band
 - Compute cap:
-  - final monthly output is deterministically downsampled to 800 names
+  - final monthly output is deterministically downsampled to `TrainingUniverseConfig.sample_size` names
+  - the current live default in code is `1200`; the artifact name remains `my_800_stocks.txt` for backward compatibility
   - downsampling is segment-based, reproducible, and keyed by `source_month` plus the configured seed
 
 ### Prediction Universe
@@ -88,7 +89,7 @@ This document freezes the incumbent universe behavior and the redesigned contrac
 
 The contract is accepted when:
 
-1. Training universe membership is month-lagged, deterministic, index/ST-safe, and bounded to 800 names.
+1. Training universe membership is month-lagged, deterministic, index/ST-safe, and bounded by the configured compute cap (`TrainingUniverseConfig.sample_size`; current default `1200`).
 2. Prediction universe membership is deterministic for the same snapshot and configuration.
 3. Holding retention is expressed through explicit buy/hold score bands rather than previous-day prediction merge logic.
 4. Train, predict, and portfolio stages all route through the shared helpers in `model_function/universe.py`.

@@ -86,6 +86,15 @@
   - 当 `.data/receive_buffer/` 缺失或为空时，`ModelPipelineService.dump_to_qlib()` 返回 `None`
   - 成功执行后会记录 `dump_to_qlib` history，包含 `csv_dir` 与 `qlib_dir`
 
+### Filter
+
+- 入口：`main.py --run filter`、`python -m scripts.filter`
+- 规范实现：`runtime/services.ModelPipelineService.build_training_universe()` -> `runtime/adapters/modeling.build_training_universe_file()` -> `model_function/universe.py`
+- 关键行为：
+  - `scripts/filter.py` 现在是薄包装，不再持有主要训练股票池实现
+  - 由 runtime 管理的路径会把规范 instrument 产物写入 `qlib_data/instruments/my_800_stocks.txt`
+  - 成功执行后会记录 `filter_training_universe` history，包含输入参数、输出路径、生效截止日、月份数量，以及合并后产物中的唯一股票数量
+
 ### Train
 
 - 入口：`main.py --run train`
@@ -121,6 +130,7 @@ python main.py --run fetch
 python main.py --run ingest
 python main.py --run export
 python main.py --run dump
+python main.py --run filter
 python main.py --run train
 python main.py --run predict
 python main.py --run portfolio
@@ -130,6 +140,7 @@ python main.py --run full
 python -m scripts.update_data
 python -m scripts.put_data --data_dir /path/to/csvs
 python -m scripts.dump_bin dump_all --data_path=.data/receive_buffer --qlib_dir=.data/qlib_data
+python -m scripts.filter --start_year 2010 --end_year 2026 --top_n 2200 --random_seed 42
 python -m scripts.predict --date 2026-04-01 --out output/top_picks_2026-04-01.csv
 python -m scripts.build_portfolio --date 2026-04-01
 python -m scripts.eval_test --config alpha_models/workflow_config_transformer_Alpha158.yaml

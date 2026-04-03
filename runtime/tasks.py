@@ -37,6 +37,12 @@ def dump_to_qlib() -> None:
     service.dump_to_qlib()
 
 
+@_named_task("filter_training_universe")
+def filter_training_universe() -> None:
+    service = build_model_service(refresh_settings=True)
+    service.build_training_universe()
+
+
 @_named_task("predict")
 def predict() -> None:
     service = build_model_service(refresh_settings=True)
@@ -60,6 +66,7 @@ __all__ = [
     "dump_to_qlib",
     "export_from_db",
     "fetch_data",
+    "filter_training_universe",
     "ingest_to_db",
     "predict",
     "train_model",

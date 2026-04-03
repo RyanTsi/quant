@@ -6,7 +6,7 @@ Usage:
     python main.py --run evening
     python main.py --run afternoon
     python main.py --run full
-    python main.py --run fetch|ingest|export|dump|train|predict|portfolio
+    python main.py --run fetch|ingest|export|dump|filter|train|predict|portfolio
     python main.py --status
 """
 
@@ -111,7 +111,7 @@ def main() -> None:
         "--run",
         type=str,
         metavar="TASK",
-        help="Run once: evening, afternoon, full, fetch, ingest, export, dump, train, predict, portfolio",
+        help="Run once: evening, afternoon, full, fetch, ingest, export, dump, filter, train, predict, portfolio",
     )
     parser.add_argument("--status", action="store_true", help="Show last run status for all tasks")
     args = parser.parse_args()

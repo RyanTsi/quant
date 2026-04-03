@@ -61,7 +61,7 @@ Every action MUST be logged.
 - create log in `docs/logs/<task>-YYYY-MM-DD-uuid.md`
 
 ### Critic
-MUST call another **subagent** to critically analyze the content of the log.
+MUST call another **subagent** witch is **Homogenous** to critically analyze the content of the log.
 
 - Attach the critic report in `docs/logs/<task>-YYYY-MM-DD-uuid.md`.
 
@@ -143,6 +143,9 @@ def get_return_rate(current, previous):
 - Variables: describe what it IS, not its type (`is_stock_selected` not `flag_bool`, `closing_prices` not `price_list`)
 - Classes: noun, singular (`PortfolioOptimizer` not `OptHelper`)
 - Keep naming style consistent across the entire module.
+
+### Code Comments — Is Required
+- Functions, key variables, and classes need to be explained.
 
 ### Derivation First — Math Before Code
 

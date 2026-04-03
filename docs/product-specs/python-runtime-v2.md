@@ -18,7 +18,7 @@
 - `--run evening`
 - `--run afternoon`
 - `--run full`
-- `--run fetch|ingest|export|dump|train|predict|portfolio`
+- `--run fetch|ingest|export|dump|filter|train|predict|portfolio`
 - `--status`
 
 ### Script Compatibility
@@ -73,6 +73,6 @@ The implementation is accepted when:
 1. Existing CLI contracts still work.
 2. New architecture modules (`runtime/*`) are active in the main runtime path.
 3. Former compatibility-owned data/model services, config access, and run-history helpers are owned directly by `runtime.services`, `runtime.config`, and `runtime.runlog`.
-4. Data-side and model-side workflow logic is runtime-adapter owned for `fetch`, `ingest`, `export`, `dump`, `predict`, and `portfolio`.
+4. Data-side and model-side workflow logic is runtime-managed for `fetch`, `ingest`, `export`, `dump`, `filter`, `predict`, and `portfolio`.
 5. Full test suite passes in `conda quant` environment.
 6. Bilingual documentation reflects the implemented behavior, including a practical runtime guide.

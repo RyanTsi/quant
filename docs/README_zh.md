@@ -149,6 +149,7 @@ python main.py --run fetch       # 通过 baostock 采集股票和指数日线
 python main.py --run ingest      # 将本地 CSV POST 到 C++ 网关
 python main.py --run export      # 从数据库导出所有股票到单独 CSV
 python main.py --run dump        # 将 CSV 转换为 Qlib 二进制格式
+python main.py --run filter      # 通过 runtime 构建训练股票池 instrument txt
 python main.py --run train       # 通过 Qlib 工作流训练 Transformer
 python main.py --run predict     # 用最新模型生成预测
 python main.py --run portfolio   # 基于预测结果生成目标权重和调仓指令
@@ -187,7 +188,7 @@ python -m scripts.view                                    # 生成 Plotly 绩效
 - `main.py --run ingest` 以及 `evening` / `full` 流水线会以 `delete_after_ingest=True` 消费打包后的 CSV，因此 ingest attempt 之后会删除已处理文件。
 - `scripts.update_data` 现在会显式打印打包后的入库目录（`send_buffer_dir`）。
 - `python -m scripts.put_data` 默认是非破坏性的；只有加上 `--delete_after_ingest` 才会在 ingest attempt 之后删除已处理 CSV，包括批次失败的文件。
-- `python -m scripts.filter` 现在按滞后成交额中位数构建月度训练股票池，并使用确定性的入池/留任带（`1800/2200`）和可复现的 800 只降采样。
+- `python -m scripts.filter` 现在是共享 `model_function` 训练股票池构建器的一个薄 runtime 包装，同时 `main.py --run filter` 也会通过 runtime registry 调度同一条路径。
 - `python -m scripts.predict` 现在对确定性的预测股票池打分：按滞后流动性取前 1000，并把仍处于前 1200 留任带内的已有持仓一起纳入。
 - `python -m scripts.build_portfolio` 现在显式暴露 `--buy_rank` 和 `--hold_rank`；默认规则是新买入看前 `300`，已有持仓放宽到前 `500`，再应用最终 `top_k` 容量上限。
 - 成功训练后，Qlib workflow 会自动生成 view；如需重跑，仍可手动执行 `python -m scripts.view`。

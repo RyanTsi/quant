@@ -8,12 +8,24 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import main
+from runtime.bootstrap import build_default_registry
 from runtime.orchestrator import SequentialOrchestrator
 from runtime.registry import RuntimeRegistry
 from runtime.runlog import RunLogStore
 
 
 class TestRuntimeRegistry(unittest.TestCase):
+    @patch("runtime.tasks.build_model_service")
+    def test_default_registry_runs_filter_task(self, mock_build):
+        service = MagicMock()
+        mock_build.return_value = service
+
+        registry = build_default_registry()
+        registry.run("filter")
+
+        mock_build.assert_called_once_with(refresh_settings=True)
+        service.build_training_universe.assert_called_once_with()
+
     def test_registry_run_single_task(self):
         seen = []
 

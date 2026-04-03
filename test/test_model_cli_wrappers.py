@@ -7,7 +7,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-from scripts import build_portfolio, predict
+from scripts import build_portfolio, filter as filter_script, predict
 
 
 class TestPredictCliWrapper(unittest.TestCase):
@@ -92,6 +92,67 @@ class TestBuildPortfolioCliWrapper(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, 1)
         self.assertIn("Portfolio build failed: missing picks", buf.getvalue())
+
+
+class TestFilterCliWrapper(unittest.TestCase):
+    @patch("scripts.filter.build_model_service")
+    def test_filter_top_liquidity_delegates_to_model_service(self, mock_build):
+        service = mock_build.return_value
+        service.build_training_universe.return_value = {"output_path": "output/mock.txt"}
+
+        result = filter_script.filter_top_liquidity(start_year=2020, end_year=2021, top_n=300, random_seed=7)
+
+        mock_build.assert_called_once_with(refresh_settings=True)
+        service.build_training_universe.assert_called_once_with(
+            start_year=2020,
+            end_year=2021,
+            top_n=300,
+            random_seed=7,
+        )
+        self.assertEqual(result["output_path"], "output/mock.txt")
+
+    @patch("scripts.filter.filter_top_liquidity")
+    def test_filter_cli_forwards_args(self, mock_filter):
+        mock_filter.return_value = {
+            "output_path": "output/my_800_stocks.txt",
+            "effective_end": "2026-04-03",
+            "source_month_count": 2,
+            "symbol_count": 5,
+        }
+
+        buf = io.StringIO()
+        with patch(
+            "sys.argv",
+            [
+                "filter.py",
+                "--start_year",
+                "2015",
+                "--end_year",
+                "2020",
+                "--top_n",
+                "1800",
+                "--random_seed",
+                "99",
+            ],
+        ):
+            with redirect_stdout(buf):
+                filter_script.main()
+
+        mock_filter.assert_called_once_with(start_year=2015, end_year=2020, top_n=1800, random_seed=99)
+        output = buf.getvalue()
+        self.assertIn("Saved to:", output)
+        self.assertIn("Unique symbols in artifact:", output)
+
+    @patch("scripts.filter.filter_top_liquidity", side_effect=RuntimeError("db unavailable"))
+    def test_filter_cli_shows_friendly_error(self, _mock_filter):
+        buf = io.StringIO()
+        with patch("sys.argv", ["filter.py"]):
+            with redirect_stdout(buf):
+                with self.assertRaises(SystemExit) as ctx:
+                    filter_script.main()
+
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("Filter build failed: db unavailable", buf.getvalue())
 
 
 if __name__ == "__main__":

@@ -144,9 +144,44 @@ class ModelPipelineService:
             **normalized_stats,
         }
 
+    @staticmethod
+    def _training_universe_history_payload(result: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "output_path": str(result.get("output_path", "")),
+            "start_year": int(result.get("start_year", 0)),
+            "end_year": int(result.get("end_year", 0)),
+            "top_n": int(result.get("top_n", 0)),
+            "random_seed": int(result.get("random_seed", 0)),
+            "effective_end": str(result.get("effective_end", "")),
+            "source_month_count": int(result.get("source_month_count", 0)),
+            "range_count": int(result.get("range_count", 0)),
+            "symbol_count": int(result.get("symbol_count", 0)),
+        }
+
     def predict(self) -> dict[str, Any]:
         result = modeling.generate_predictions()
         self.history.record("predict", **self._predict_history_payload(result))
+        return result
+
+    def build_training_universe(
+        self,
+        *,
+        start_year: int = 2010,
+        end_year: int = 2026,
+        top_n: int = 2200,
+        random_seed: int = 42,
+    ) -> dict[str, Any]:
+        result = modeling.build_training_universe_file(
+            start_year=start_year,
+            end_year=end_year,
+            top_n=top_n,
+            random_seed=random_seed,
+            data_path=self.settings.data_path,
+            qlib_dir=self.settings.qlib_data_path,
+            db_host=self.settings.db_host,
+            db_port=self.settings.db_port,
+        )
+        self.history.record("filter_training_universe", **self._training_universe_history_payload(result))
         return result
 
     def build_portfolio(self) -> dict[str, Any]:

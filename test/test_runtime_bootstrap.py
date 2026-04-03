@@ -10,6 +10,7 @@ class TestRuntimeBootstrap(unittest.TestCase):
 
         self.assertEqual(set(registry.task_map.keys()), set(TASK_NAMES))
         self.assertEqual(registry.pipeline_map, PIPELINE_TASK_NAMES)
+        self.assertIn("filter", registry.task_map)
         self.assertEqual(registry.pipeline_map["full"], ["fetch", "ingest", "export", "dump", "train", "predict", "portfolio"])
 
 

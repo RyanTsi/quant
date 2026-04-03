@@ -21,13 +21,23 @@ def build_default_orchestrator() -> SequentialOrchestrator:
 
 
 def build_default_registry() -> RuntimeRegistry:
-    from runtime.tasks import build_portfolio, dump_to_qlib, export_from_db, fetch_data, ingest_to_db, predict, train_model
+    from runtime.tasks import (
+        build_portfolio,
+        dump_to_qlib,
+        export_from_db,
+        fetch_data,
+        filter_training_universe,
+        ingest_to_db,
+        predict,
+        train_model,
+    )
 
     task_map = {
         "fetch": fetch_data,
         "ingest": ingest_to_db,
         "export": export_from_db,
         "dump": dump_to_qlib,
+        "filter": filter_training_universe,
         "train": train_model,
         "predict": predict,
         "portfolio": build_portfolio,

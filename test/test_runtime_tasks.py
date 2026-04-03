@@ -10,6 +10,7 @@ class TestRuntimeTasks(unittest.TestCase):
         self.assertEqual(tasks.ingest_to_db.task_name, "ingest_to_db")
         self.assertEqual(tasks.export_from_db.task_name, "export_from_db")
         self.assertEqual(tasks.dump_to_qlib.task_name, "dump_to_qlib")
+        self.assertEqual(tasks.filter_training_universe.task_name, "filter_training_universe")
         self.assertEqual(tasks.train_model.task_name, "train_model")
         self.assertEqual(tasks.predict.task_name, "predict")
         self.assertEqual(tasks.build_portfolio.task_name, "build_portfolio")
@@ -50,14 +51,16 @@ class TestRuntimeTasks(unittest.TestCase):
         mock_build.return_value = service
 
         tasks.dump_to_qlib()
+        tasks.filter_training_universe()
         tasks.train_model()
         tasks.predict()
         tasks.build_portfolio()
 
-        self.assertEqual(mock_build.call_count, 4)
+        self.assertEqual(mock_build.call_count, 5)
         for call in mock_build.call_args_list:
             self.assertEqual(call.kwargs, {"refresh_settings": True})
         service.dump_to_qlib.assert_called_once_with()
+        service.build_training_universe.assert_called_once_with()
         service.train_model.assert_called_once_with()
         service.predict.assert_called_once_with()
         service.build_portfolio.assert_called_once_with()

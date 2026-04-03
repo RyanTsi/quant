@@ -5,6 +5,7 @@ TASK_NAMES: tuple[str, ...] = (
     "ingest",
     "export",
     "dump",
+    "filter",
     "train",
     "predict",
     "portfolio",

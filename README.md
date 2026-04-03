@@ -149,6 +149,7 @@ python main.py --run fetch       # Fetch stock & index bars via baostock
 python main.py --run ingest      # POST local CSVs to the C++ gateway
 python main.py --run export      # Export all symbols from DB to per-symbol CSVs
 python main.py --run dump        # Convert CSVs to Qlib binary format
+python main.py --run filter      # Build the training-universe instrument txt via runtime
 python main.py --run train       # Train Transformer via Qlib workflow
 python main.py --run predict     # Generate predictions with latest model
 python main.py --run portfolio   # Build target weights and rebalance orders
@@ -187,7 +188,7 @@ Notes:
 - `main.py --run ingest` and the `evening` / `full` pipelines consume packaged CSVs with `delete_after_ingest=True`, so processed files are deleted after the ingest attempt.
 - `scripts.update_data` now reports the packaged ingest directory (`send_buffer_dir`) explicitly.
 - `python -m scripts.put_data` is non-destructive by default; add `--delete_after_ingest` to delete processed CSV files after the ingest attempt, including files whose batches failed.
-- `python -m scripts.filter` now builds the monthly training universe from lagged median liquidity with a deterministic entry/exit buffer (`1800/2200`) and a reproducible downsample to 800 names.
+- `python -m scripts.filter` is now a thin runtime wrapper over the shared `model_function` training-universe builder, and `main.py --run filter` dispatches the same path through the runtime registry.
 - `python -m scripts.predict` now scores a deterministic prediction universe: top 1000 by lagged liquidity plus existing holdings that remain inside the wider top-1200 exit band.
 - `python -m scripts.build_portfolio` now exposes explicit `--buy_rank` and `--hold_rank` bands; the defaults are `300` for new buys and `500` for existing holdings before the final `top_k` capacity cap is applied.
 - Successful training runs trigger view generation automatically via the Qlib workflow; `python -m scripts.view` is still available for manual reruns.
