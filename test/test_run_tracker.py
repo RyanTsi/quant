@@ -1,41 +1,34 @@
 import unittest
-import json
-import os
 import tempfile
-from unittest.mock import patch
-from utils.run_tracker import record_run, get_last_run, today, _load, _save, init
+from runtime.runlog import get_last_run, load_run_history, record_run, save_run_history, today
 
 
-class TestRunTracker(unittest.TestCase):
+class TestRunLogHelpers(unittest.TestCase):
 
     def setUp(self):
-        self.tmp = tempfile.NamedTemporaryFile(
-            suffix=".json", delete=False, mode="w"
-        )
-        self.tmp.write("{}")
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
         self.tmp.close()
-        self.patcher = patch("utils.run_tracker._tracker_file", self.tmp.name)
-        self.patcher.start()
 
     def tearDown(self):
-        self.patcher.stop()
+        import os
+
         if os.path.exists(self.tmp.name):
             os.unlink(self.tmp.name)
 
     def test_record_run_creates_entry(self):
-        entry = record_run("test_task")
+        entry = record_run("test_task", path=self.tmp.name)
         self.assertIn("last_run", entry)
 
     def test_record_run_with_kwargs(self):
-        entry = record_run("test_task", status="ok")
+        entry = record_run("test_task", path=self.tmp.name, status="ok")
         self.assertEqual(entry["status"], "ok")
 
     def test_get_last_run_returns_none_for_unknown(self):
-        self.assertIsNone(get_last_run("nonexistent"))
+        self.assertIsNone(get_last_run("nonexistent", path=self.tmp.name))
 
     def test_get_last_run_returns_entry(self):
-        record_run("my_task")
-        result = get_last_run("my_task")
+        record_run("my_task", path=self.tmp.name)
+        result = get_last_run("my_task", path=self.tmp.name)
         self.assertIsNotNone(result)
         self.assertIn("last_run", result)
 
@@ -45,19 +38,17 @@ class TestRunTracker(unittest.TestCase):
         self.assertTrue(t.isdigit())
 
     def test_multiple_tasks_independent(self):
-        record_run("task_a", status="done")
-        record_run("task_b", status="running")
-        a = get_last_run("task_a")
-        b = get_last_run("task_b")
+        record_run("task_a", path=self.tmp.name, status="done")
+        record_run("task_b", path=self.tmp.name, status="running")
+        a = get_last_run("task_a", path=self.tmp.name)
+        b = get_last_run("task_b", path=self.tmp.name)
         self.assertEqual(a["status"], "done")
         self.assertEqual(b["status"], "running")
 
-    def test_init_sets_tracker_file(self):
-        tmpdir = tempfile.mkdtemp()
-        init(tmpdir)
-        from utils import run_tracker
-        self.assertEqual(run_tracker._tracker_file, os.path.join(tmpdir, "run_history.json"))
-        os.rmdir(tmpdir)
+    def test_load_and_save_round_trip(self):
+        save_run_history({"task_a": {"last_run": "2026-04-02 10:00:00", "status": "ok"}}, path=self.tmp.name)
+        loaded = load_run_history(path=self.tmp.name)
+        self.assertEqual(loaded["task_a"]["status"], "ok")
 
 
 if __name__ == "__main__":

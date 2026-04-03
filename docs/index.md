@@ -2,9 +2,12 @@
 
 ## Core Docs
 
-- Project overview: [README](../README.md)
+- Project overview (EN): [README](../README.md)
+- Project overview (ZH): [docs/README_zh.md](README_zh.md)
 - Architecture (EN): [ARCHITECTURE](../ARCHITECTURE.md)
 - Architecture (ZH): [docs/ARCHITECTURE_zh.md](ARCHITECTURE_zh.md)
+- Runtime guide (EN): [docs/python-runtime-guide.md](python-runtime-guide.md)
+- Runtime guide (ZH): [docs/python-runtime-guide_zh.md](python-runtime-guide_zh.md)
 - Navigation (EN): [docs/NAVIGATION.md](NAVIGATION.md)
 - Navigation (ZH): [docs/NAVIGATION_zh.md](NAVIGATION_zh.md)
 
@@ -31,6 +34,9 @@
 - Python runtime behavior specification:
   - EN: [docs/product-specs/python-runtime-v2.md](product-specs/python-runtime-v2.md)
   - ZH: [docs/product-specs/python-runtime-v2_zh.md](product-specs/python-runtime-v2_zh.md)
+- A-share universe contract:
+  - EN: [docs/product-specs/a-share-universe-contract.md](product-specs/a-share-universe-contract.md)
+  - ZH: [docs/product-specs/a-share-universe-contract_zh.md](product-specs/a-share-universe-contract_zh.md)
 
 ## Execution Plans
 

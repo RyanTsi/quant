@@ -18,7 +18,7 @@ import signal
 import sys
 import time
 
-from quantcore.registry import RuntimeRegistry
+from runtime.bootstrap import build_default_registry
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,7 +31,7 @@ logger = logging.getLogger("main")
 
 def setup_schedule():
     import schedule
-    from scheduler.pipelines import AFTERNOON_PIPELINE, EVENING_PIPELINE, run_pipeline
+    registry = build_default_registry()
 
     weekdays = [
         schedule.every().monday,
@@ -42,8 +42,8 @@ def setup_schedule():
     ]
 
     for day in weekdays:
-        day.at("18:15").do(run_pipeline, EVENING_PIPELINE)
-        day.at("14:00").do(run_pipeline, AFTERNOON_PIPELINE)
+        day.at("18:15").do(registry.run, "evening")
+        day.at("14:00").do(registry.run, "afternoon")
     return schedule
 
 
@@ -72,18 +72,25 @@ def run_scheduler() -> None:
 
 
 def run_once(task_name: str) -> None:
-    registry = RuntimeRegistry.build_default()
+    registry = build_default_registry()
     try:
-        registry.run(task_name)
+        ok = registry.run(task_name)
     except KeyError as exc:
         print(str(exc))
+        sys.exit(1)
+    except Exception as exc:
+        print(f"Task '{task_name}' failed: {exc}")
+        sys.exit(1)
+
+    if not ok:
+        print(f"Pipeline '{task_name}' failed.")
         sys.exit(1)
 
 
 def show_status() -> None:
-    from utils.run_tracker import _load
+    from runtime.runlog import load_run_history
 
-    data = _load()
+    data = load_run_history()
     if not data:
         print("No run history found.")
         return

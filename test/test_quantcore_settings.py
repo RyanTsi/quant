@@ -1,12 +1,12 @@
-"""Tests for quantcore.settings."""
+"""Tests for runtime.config settings loader."""
 
 import unittest
 from unittest.mock import patch
 
-from quantcore.settings import BASE_DIR, get_settings, load_settings
+from runtime.config import BASE_DIR, get_settings, load_settings
 
 
-class TestQuantcoreSettings(unittest.TestCase):
+class TestRuntimeConfigSettings(unittest.TestCase):
     def test_load_settings_from_mapping(self):
         env = {
             "DB_HOST": "10.0.0.2",

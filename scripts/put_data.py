@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from data_pipeline.ingest import ingest_directory
-from quantcore.settings import get_settings
+from runtime.services import build_data_service
 
 
 def main() -> None:
@@ -14,17 +13,22 @@ def main() -> None:
     parser.add_argument(
         "--delete_after_ingest",
         action="store_true",
-        help="Delete local CSV files after successful ingest.",
+        help="Delete local CSV files after ingest attempt (including failed files).",
     )
     args = parser.parse_args()
 
-    settings = get_settings(refresh=True)
-    server_url = f"http://{settings.db_host}:{settings.db_port}"
-    data_dir = args.data_dir or settings.send_buffer_path
-
+    service = build_data_service(refresh_settings=True)
+    server_url = f"http://{service.settings.db_host}:{service.settings.db_port}"
+    data_dir = args.data_dir or service.settings.send_buffer_path
     print(f"Server: {server_url}")
     print(f"Data:   {data_dir}")
-    ingest_directory(server_url, data_dir, delete_after_ingest=args.delete_after_ingest)
+
+    result = service.ingest_to_db(
+        data_dir=args.data_dir,
+        delete_after_ingest=args.delete_after_ingest,
+    )
+    if result is None:
+        return
 
 
 if __name__ == "__main__":

@@ -1,14 +1,21 @@
 import os
 import random
 from datetime import timedelta
-import math
 
 import pandas as pd
 
 import utils.io
-from config.settings import settings
 from data_pipeline.database import DBClient
-from utils.preprocess import compute_liquidity
+from model_function.universe import (
+    TRAINING_UNIVERSE_DEFAULTS,
+    TrainingUniverseConfig,
+    collect_training_month_liquidity,
+    select_training_symbols,
+)
+from runtime.config import get_settings
+from utils.preprocess import read_symbol_list
+
+settings = get_settings()
 
 
 def _output_instruments_path() -> str:
@@ -24,11 +31,11 @@ def _output_instruments_path() -> str:
 def _month_ranges(start_year: int, end_date: pd.Timestamp) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
     start = pd.Timestamp(f"{start_year}-01-01")
     months = pd.period_range(start=start, end=end_date, freq="M")
-    return [(m.start_time.normalize(), m.end_time.normalize()) for m in months]
+    return [(month.start_time.normalize(), month.end_time.normalize()) for month in months]
 
 
 def _target_source_month_pairs(
-    months: list[tuple[pd.Timestamp, pd.Timestamp]]
+    months: list[tuple[pd.Timestamp, pd.Timestamp]],
 ) -> list[tuple[pd.Period, pd.Timestamp, pd.Timestamp]]:
     """
     Build (source_month, target_start, target_end) pairs.
@@ -40,195 +47,8 @@ def _target_source_month_pairs(
     for idx in range(1, len(months)):
         target_start, target_end = months[idx]
         source_start, _source_end = months[idx - 1]
-        source_month = pd.Period(source_start, freq="M")
-        pairs.append((source_month, target_start, target_end))
+        pairs.append((pd.Period(source_start, freq="M"), target_start, target_end))
     return pairs
-
-
-def _normalize_symbol_daily_rows(rows: list[dict], start_year: int, end_year: int) -> pd.DataFrame:
-    if not rows:
-        return pd.DataFrame()
-
-    df = pd.DataFrame(rows)
-    if "date" not in df.columns:
-        return pd.DataFrame()
-
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df = df.dropna(subset=["date"]).sort_values("date")
-    if getattr(df["date"].dt, "tz", None) is not None:
-        df["date"] = df["date"].dt.tz_localize(None)
-    df = df[(df["date"] >= f"{start_year}-01-01") & (df["date"] <= f"{end_year}-12-31")]
-    if df.empty:
-        return pd.DataFrame()
-
-    turnover = compute_liquidity(df, amount_col="amount", close_col="close", volume_col="volume")
-    if "tradestatus" in df.columns:
-        tradestatus = pd.to_numeric(df["tradestatus"], errors="coerce").fillna(1)
-        turnover = turnover.where(tradestatus != 0, 0)
-
-    close = pd.to_numeric(df.get("close"), errors="coerce")
-    ret = close.pct_change()
-
-    out = pd.DataFrame(
-        {
-            "date": df["date"],
-            "turnover": pd.to_numeric(turnover, errors="coerce").fillna(0.0),
-            "ret": pd.to_numeric(ret, errors="coerce"),
-            "month": df["date"].dt.to_period("M"),
-        }
-    )
-    if "isST" in df.columns:
-        out["isST"] = pd.to_numeric(df["isST"], errors="coerce").fillna(0.0)
-    else:
-        out["isST"] = 0.0
-    return out
-
-
-def _quarter_lookback_window(source_month: pd.Period) -> tuple[pd.Timestamp, pd.Timestamp]:
-    end = source_month.end_time.normalize()
-    start = (source_month.start_time - pd.DateOffset(months=2)).normalize()
-    return start, end
-
-
-def _collect_symbol_month_metrics(
-    symbol: str,
-    rows: list[dict],
-    source_months: list[pd.Period],
-    start_year: int,
-    end_year: int,
-) -> list[dict]:
-    df = _normalize_symbol_daily_rows(rows, start_year, end_year)
-    if df.empty:
-        return []
-
-    st_months = set(df.loc[df["isST"] != 0, "month"].tolist())
-    records: list[dict] = []
-
-    for source_m in source_months:
-        # Exclude ST sources directly from training membership generation.
-        if source_m in st_months:
-            continue
-
-        win_start, win_end = _quarter_lookback_window(source_m)
-        win_df = df[(df["date"] >= win_start) & (df["date"] <= win_end)]
-        if win_df.empty:
-            continue
-
-        liq = pd.to_numeric(win_df["turnover"], errors="coerce").dropna()
-        if liq.empty:
-            continue
-        liq_mean = float(liq.mean())
-        liq_std = float(liq.std(ddof=0))
-        # Liquidity stability over the past quarter (higher is more stable + liquid).
-        stability = liq_mean / (liq_std + 1e-12)
-
-        vol = float(pd.to_numeric(win_df["ret"], errors="coerce").dropna().std(ddof=0))
-        if math.isnan(vol):
-            vol = 0.0
-
-        records.append(
-            {
-                "symbol": symbol,
-                "source_month": source_m,
-                "mean_turnover": liq_mean,
-                "stability": float(stability),
-                "volatility": vol,
-            }
-        )
-
-    return records
-
-
-def _exclude_volatility_extremes(df_m: pd.DataFrame, lower_q: float = 0.05, upper_q: float = 0.95) -> pd.DataFrame:
-    if df_m.empty or "volatility" not in df_m.columns:
-        return df_m
-    vol = pd.to_numeric(df_m["volatility"], errors="coerce")
-    valid = vol.notna()
-    if int(valid.sum()) < 3:
-        return df_m.loc[valid].copy()
-    low = float(vol[valid].quantile(lower_q))
-    high = float(vol[valid].quantile(upper_q))
-    keep = valid & vol.between(low, high, inclusive="both")
-    return df_m.loc[keep].copy()
-
-
-def _weighted_segment_targets(
-    segment_count: int,
-    total_select: int,
-    min_per_segment: int,
-) -> list[int]:
-    if segment_count <= 0 or total_select <= 0:
-        return []
-    min_per_segment = max(1, int(min_per_segment))
-    if min_per_segment * segment_count > total_select:
-        min_per_segment = max(1, total_select // segment_count)
-    base = [min_per_segment] * segment_count
-    remain = max(0, total_select - sum(base))
-
-    weights = [segment_count - i for i in range(segment_count)]
-    w_sum = sum(weights) or 1
-    raw_extra = [remain * w / w_sum for w in weights]
-    extra = [int(x) for x in raw_extra]
-    left = remain - sum(extra)
-    # Largest-remainder with higher-rank priority on ties.
-    frac_order = sorted(
-        range(segment_count),
-        key=lambda i: (raw_extra[i] - extra[i], weights[i]),
-        reverse=True,
-    )
-    for i in frac_order:
-        if left <= 0:
-            break
-        extra[i] += 1
-        left -= 1
-
-    return [base[i] + extra[i] for i in range(segment_count)]
-
-
-def _weighted_group_pick(
-    ranked_symbols: list[str],
-    *,
-    segment_count: int,
-    total_select: int,
-    min_per_segment: int,
-) -> list[str]:
-    ranked = [str(s) for s in ranked_symbols if str(s)]
-    if not ranked or segment_count <= 0:
-        return []
-
-    segments: list[list[str]] = []
-    n = len(ranked)
-    for i in range(segment_count):
-        start = int(i * n / segment_count)
-        end = int((i + 1) * n / segment_count)
-        segments.append(ranked[start:end])
-
-    targets = _weighted_segment_targets(segment_count, total_select, min_per_segment)
-    picked = [0] * segment_count
-    capacities = [len(seg) for seg in segments]
-
-    shortfall = 0
-    for i in range(segment_count):
-        take = min(targets[i], capacities[i])
-        picked[i] = take
-        shortfall += targets[i] - take
-
-    # Re-distribute unmet quota to higher-ranked groups first.
-    if shortfall > 0:
-        for i in range(segment_count):
-            if shortfall <= 0:
-                break
-            avail = capacities[i] - picked[i]
-            if avail <= 0:
-                continue
-            add = min(avail, shortfall)
-            picked[i] += add
-            shortfall -= add
-
-    out: list[str] = []
-    for i, seg in enumerate(segments):
-        out.extend(seg[: picked[i]])
-    return list(dict.fromkeys(out))
 
 
 def _sample_symbols_for_month(
@@ -239,17 +59,43 @@ def _sample_symbols_for_month(
     *,
     total_select: int = 800,
     min_per_segment: int = 20,
+    previous_symbols: set[str] | None = None,
+    source_month: pd.Period | str = "unknown",
+    entry_limit: int = TRAINING_UNIVERSE_DEFAULTS.entry_limit,
+    exit_limit: int = TRAINING_UNIVERSE_DEFAULTS.exit_limit,
+    seed: int = TRAINING_UNIVERSE_DEFAULTS.seed,
+    excluded_symbols: set[str] | None = None,
 ) -> list[str]:
-    del rng  # deterministic allocation by rank for reproducibility
+    del rng  # The redesign keeps training-only downsampling deterministic.
     if df_m.empty:
         return []
-    top = df_m.sort_values(["stability", "mean_turnover"], ascending=[False, False]).head(top_n)
-    ranked = pd.Series(top["symbol"]).reset_index(drop=True).astype(str).tolist()
-    return _weighted_group_pick(
-        ranked,
-        segment_count=max(1, segment_count),
-        total_select=max(1, int(total_select)),
-        min_per_segment=max(1, int(min_per_segment)),
+
+    month_frame = df_m.copy()
+    if "lagged_liquidity" not in month_frame.columns:
+        if "mean_turnover" in month_frame.columns:
+            month_frame["lagged_liquidity"] = pd.to_numeric(month_frame["mean_turnover"], errors="coerce").fillna(0.0)
+        else:
+            return []
+
+    if top_n > 0:
+        month_frame = month_frame.sort_values("lagged_liquidity", ascending=False).head(int(top_n))
+
+    config = TrainingUniverseConfig(
+        liquidity_lookback_days=TRAINING_UNIVERSE_DEFAULTS.liquidity_lookback_days,
+        liquidity_min_periods=TRAINING_UNIVERSE_DEFAULTS.liquidity_min_periods,
+        entry_limit=entry_limit,
+        exit_limit=exit_limit,
+        sample_size=total_select,
+        segment_count=segment_count,
+        min_per_segment=min_per_segment,
+        seed=seed,
+    )
+    return select_training_symbols(
+        month_frame,
+        previous_symbols,
+        source_month=source_month,
+        excluded_symbols=excluded_symbols,
+        config=config,
     )
 
 
@@ -258,36 +104,47 @@ def _merge_contiguous_ranges(df_ranges: pd.DataFrame) -> pd.DataFrame:
         return df_ranges
 
     merged_rows = []
-    for symbol, grp in df_ranges.sort_values(["symbol", "start_date"]).groupby("symbol"):
-        start = pd.Timestamp(grp.iloc[0]["start_date"])
-        end = pd.Timestamp(grp.iloc[0]["end_date"])
-        for _, row in grp.iloc[1:].iterrows():
-            cur_start = pd.Timestamp(row["start_date"])
-            cur_end = pd.Timestamp(row["end_date"])
-            if cur_start <= end + timedelta(days=1):
-                end = max(end, cur_end)
-            else:
-                merged_rows.append(
-                    {"symbol": symbol, "start_date": start.strftime("%Y-%m-%d"), "end_date": end.strftime("%Y-%m-%d")}
-                )
-                start, end = cur_start, cur_end
+    for symbol, group in df_ranges.sort_values(["symbol", "start_date"]).groupby("symbol"):
+        start = pd.Timestamp(group.iloc[0]["start_date"])
+        end = pd.Timestamp(group.iloc[0]["end_date"])
+        for _, row in group.iloc[1:].iterrows():
+            current_start = pd.Timestamp(row["start_date"])
+            current_end = pd.Timestamp(row["end_date"])
+            if current_start <= end + timedelta(days=1):
+                end = max(end, current_end)
+                continue
+            merged_rows.append({"symbol": symbol, "start_date": start.strftime("%Y-%m-%d"), "end_date": end.strftime("%Y-%m-%d")})
+            start, end = current_start, current_end
         merged_rows.append({"symbol": symbol, "start_date": start.strftime("%Y-%m-%d"), "end_date": end.strftime("%Y-%m-%d")})
     return pd.DataFrame(merged_rows)
 
 
-def filter_top_liquidity(start_year=2010, end_year=2026, top_n=2000, random_seed=42):
+def filter_top_liquidity(start_year=2010, end_year=2026, top_n=2200, random_seed=42):
     db_client = DBClient(settings.db_host, settings.db_port)
     all_stock_code_list_path = os.path.join(settings.data_path, "stock_code_list")
     all_stock_list = utils.io.read_file_lines(all_stock_code_list_path)
+    index_symbols = read_symbol_list(os.path.join(settings.data_path, "index_code_list"))
+
     today = pd.Timestamp.today().normalize()
     requested_end = pd.Timestamp(f"{end_year}-12-31")
     effective_end = min(today, requested_end)
     months = _month_ranges(start_year, effective_end)
     month_pairs = _target_source_month_pairs(months)
-    source_months = [p[0] for p in month_pairs]
+    source_months = [pair[0] for pair in month_pairs]
     rng = random.Random(random_seed)
 
-    monthly_metrics = []
+    training_config = TrainingUniverseConfig(
+        liquidity_lookback_days=TRAINING_UNIVERSE_DEFAULTS.liquidity_lookback_days,
+        liquidity_min_periods=TRAINING_UNIVERSE_DEFAULTS.liquidity_min_periods,
+        entry_limit=TRAINING_UNIVERSE_DEFAULTS.entry_limit,
+        exit_limit=TRAINING_UNIVERSE_DEFAULTS.exit_limit,
+        sample_size=TRAINING_UNIVERSE_DEFAULTS.sample_size,
+        segment_count=TRAINING_UNIVERSE_DEFAULTS.segment_count,
+        min_per_segment=TRAINING_UNIVERSE_DEFAULTS.min_per_segment,
+        seed=random_seed,
+    )
+
+    monthly_metrics: list[dict] = []
     query_start = f"{start_year}-01-01"
     query_end = effective_end.strftime("%Y-%m-%d")
     for stock_code in all_stock_list:
@@ -296,55 +153,74 @@ def filter_top_liquidity(start_year=2010, end_year=2026, top_n=2000, random_seed
             continue
         rows = (response.json() or {}).get("data", [])
         monthly_metrics.extend(
-            _collect_symbol_month_metrics(
+            collect_training_month_liquidity(
                 symbol=stock_code,
                 rows=rows,
                 source_months=source_months,
                 start_year=start_year,
                 end_year=end_year,
+                config=training_config,
             )
         )
 
+    out_txt = _output_instruments_path()
     if not monthly_metrics:
-        out_txt = _output_instruments_path()
-        with open(out_txt, "w", encoding="utf-8") as f:
-            f.write("")
+        with open(out_txt, "w", encoding="utf-8") as handle:
+            handle.write("")
         return
 
-    df = pd.DataFrame(monthly_metrics)
-    selected_ranges = []
-    for source_m, m_start, m_end in month_pairs:
-        df_m = df[df["source_month"] == source_m]
-        if df_m.empty:
+    monthly_frame = pd.DataFrame(monthly_metrics)
+    selected_ranges: list[dict] = []
+    previous_symbols: set[str] = set()
+    for source_month, month_start, month_end in month_pairs:
+        month_frame = monthly_frame[monthly_frame["source_month"] == source_month]
+        if month_frame.empty:
+            previous_symbols = set()
             continue
-        df_m = _exclude_volatility_extremes(df_m, lower_q=0.05, upper_q=0.95)
-        symbols = _sample_symbols_for_month(df_m, rng, top_n=top_n, segment_count=10)
-        for sym in symbols:
-            selected_ranges.append({"symbol": sym, "start_date": m_start.strftime("%Y-%m-%d"), "end_date": m_end.strftime("%Y-%m-%d")})
+
+        symbols = _sample_symbols_for_month(
+            month_frame,
+            rng=rng,
+            top_n=top_n,
+            segment_count=training_config.segment_count,
+            total_select=training_config.sample_size,
+            min_per_segment=training_config.min_per_segment,
+            previous_symbols=previous_symbols,
+            source_month=source_month,
+            entry_limit=training_config.entry_limit,
+            exit_limit=training_config.exit_limit,
+            seed=training_config.seed,
+            excluded_symbols=index_symbols,
+        )
+        previous_symbols = set(symbols)
+        for symbol in symbols:
+            selected_ranges.append(
+                {
+                    "symbol": symbol,
+                    "start_date": month_start.strftime("%Y-%m-%d"),
+                    "end_date": month_end.strftime("%Y-%m-%d"),
+                }
+            )
 
     if not selected_ranges:
-        out_txt = _output_instruments_path()
-        with open(out_txt, "w", encoding="utf-8") as f:
-            f.write("")
+        with open(out_txt, "w", encoding="utf-8") as handle:
+            handle.write("")
         return
 
     df_ranges = pd.DataFrame(selected_ranges)
-
-    # If the final period is a partial month, merge it with previous month.
     if months:
         last_start, last_end = months[-1]
         if effective_end < last_end and len(months) >= 2:
             prev_start, _prev_end = months[-2]
-            last_start_str = last_start.strftime("%Y-%m-%d")
-            prev_start_str = prev_start.strftime("%Y-%m-%d")
-            df_ranges.loc[df_ranges["start_date"] == last_start_str, "start_date"] = prev_start_str
+            df_ranges.loc[
+                df_ranges["start_date"] == last_start.strftime("%Y-%m-%d"),
+                "start_date",
+            ] = prev_start.strftime("%Y-%m-%d")
 
     merged = _merge_contiguous_ranges(df_ranges)
-
-    out_txt = _output_instruments_path()
-    with open(out_txt, "w", encoding="utf-8") as f:
+    with open(out_txt, "w", encoding="utf-8") as handle:
         for _, row in merged.iterrows():
-            f.write(f"{row['symbol']}\t{row['start_date']}\t{row['end_date']}\n")
+            handle.write(f"{row['symbol']}\t{row['start_date']}\t{row['end_date']}\n")
     print(f"Saved to {out_txt}")
 
 

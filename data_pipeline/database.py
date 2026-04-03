@@ -3,11 +3,12 @@
 import logging
 
 import requests
-from config.settings import settings
 from requests.adapters import HTTPAdapter
+from runtime.config import get_settings
 from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 class DBClient:

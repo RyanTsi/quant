@@ -4,6 +4,7 @@
 
 pyqlib==0.9.7
 akshare==1.18.24
+baostock==0.8.9
 tushare==1.4.24
 TA-Lib==0.6.8
 
@@ -18,3 +19,5 @@ seaborn==0.13.2
 
 plotly==6.5.2
 statsmodels==0.14.6
+
+pytest==9.0.2

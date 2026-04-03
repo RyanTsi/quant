@@ -1,36 +1,39 @@
 # Navigation 内容层：系统地图
 
-本文件提供系统级拓扑与模块职责总览。
+本文件提供当前 runtime-first 仓库布局下的系统级拓扑与模块职责总览。
 
 ## 1. 项目拓扑
 
 ```mermaid
 graph TD
-    A[main.py / quantcore] --> B[scheduler]
-    B --> C[data_pipeline]
-    B --> D[alpha_models]
-    B --> E[scripts]
-    D --> F[backtesting]
-    C --> G[server API]
-    H[config] --> A
-    I[utils] --> A
-    J[test] --> A
-    K[docs] --> A
+    A[main.py] --> B[runtime bootstrap/registry]
+    C[scripts] --> B
+    B --> F[runtime tasks/services/adapters]
+    F --> G[model_function]
+    F --> H[data_pipeline]
+    F --> I[alpha_models]
+    G --> J[backtesting]
+    H --> K[server API]
+    K --> L[(TimescaleDB)]
+    F --> M[utils helpers]
+    N[test] --> B
+    O[docs] --> B
 ```
 
 ## 2. 模块用途映射
 
 | 模块 | 作用 | 入口文件 |
 |---|---|---|
-| `quantcore/` | 运行时核心编排 | `settings.py`, `services/*`, `pipeline.py`, `registry.py` |
-| `scheduler/` | 调度任务适配与流水线编排 | `data_tasks.py`, `model_tasks.py`, `pipelines.py` |
-| `data_pipeline/` | 抓取/入库/导出与网关客户端 | `fetcher.py`, `ingest.py`, `database.py` |
-| `alpha_models/` | 训练工作流与模型配置 | `qlib_workflow.py`, `workflow/runner.py` |
-| `scripts/` | 一次性 CLI 运行路径 | `predict.py`, `build_portfolio.py`, `view.py` |
-| `config/` | 配置兼容入口与环境设置 | `settings.py` |
-| `utils/` | 叶子工具与 run-tracker 兼容 | `io.py`, `format.py`, `run_tracker.py` |
-| `test/` | 单元/整体测试 | `test_*.py` |
+| `runtime/` | 规范编排、任务注册、运行时状态、services 与 workflow adapters | `bootstrap.py`, `registry.py`, `tasks.py`, `services.py`, `config.py`, `runlog.py`, `adapters/*` |
+| `scripts/` | 基于 runtime 或 service 表面的薄 CLI 路径 | `update_data.py`, `put_data.py`, `dump_bin.py`, `predict.py`, `build_portfolio.py`, `view.py`, `eval_test.py` |
+| `model_function/` | 训练/预测股票池与持仓缓冲等模型域规则的复用 helper | `universe.py` |
+| `data_pipeline/` | 底层 BaoStock 抓取 provider 与网关 HTTP 客户端 | `fetcher.py`, `database.py` |
+| `alpha_models/` | Qlib 训练工作流与 workflow runner | `qlib_workflow.py`, `workflow/runner.py` |
+| `backtesting/` | 组合构建与调仓订单生成 | `portfolio.py` |
+| `utils/` | 被 runtime 与脚本复用的共享工具函数 | `io.py`, `format.py`, `preprocess.py` |
+| `test/` | 单元测试与整体流程验证面 | `test_*.py` |
+| `server/` | C++ 网关与数据库部署资源 | `main.cc`, `sql/*`, `docker/*` |
 
 ## 3. 使用方式
 
-先使用本图定位模块归属，再进入具体模块索引节点。
+先用本图判断模块归属，再进入具体模块索引节点。凡是涉及流水线分发或任务顺序，都应先从 `runtime/` 入手，而不是去找已经删除的 scheduler wrapper。

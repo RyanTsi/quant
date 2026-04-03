@@ -1,36 +1,42 @@
 # Navigation Content: System Map
 
-This file provides high-level system topology and module responsibilities.
+This file provides high-level system topology and module responsibilities for
+the current runtime-first repository layout.
 
 ## 1. Project Topology
 
 ```mermaid
 graph TD
-    A[main.py / quantcore] --> B[scheduler]
-    B --> C[data_pipeline]
-    B --> D[alpha_models]
-    B --> E[scripts]
-    D --> F[backtesting]
-    C --> G[server API]
-    H[config] --> A
-    I[utils] --> A
-    J[test] --> A
-    K[docs] --> A
+    A[main.py] --> B[runtime bootstrap/registry]
+    C[scripts] --> B
+    B --> F[runtime tasks/services/adapters]
+    F --> G[model_function]
+    F --> H[data_pipeline]
+    F --> I[alpha_models]
+    G --> J[backtesting]
+    H --> K[server API]
+    K --> L[(TimescaleDB)]
+    F --> M[utils helpers]
+    N[test] --> B
+    O[docs] --> B
 ```
 
 ## 2. Module Purpose Map
 
 | Module | Purpose | Entry files |
 |---|---|---|
-| `quantcore/` | runtime core orchestration | `settings.py`, `services/*`, `pipeline.py`, `registry.py` |
-| `scheduler/` | scheduled task adapters and pipeline wiring | `data_tasks.py`, `model_tasks.py`, `pipelines.py` |
-| `data_pipeline/` | fetch/ingest/export and gateway client | `fetcher.py`, `ingest.py`, `database.py` |
-| `alpha_models/` | training workflow and model configs | `qlib_workflow.py`, `workflow/runner.py` |
-| `scripts/` | one-off CLI execution paths | `predict.py`, `build_portfolio.py`, `view.py` |
-| `config/` | config compatibility and env settings | `settings.py` |
-| `utils/` | leaf helpers and run-tracker compatibility | `io.py`, `format.py`, `run_tracker.py` |
-| `test/` | unit/integration tests | `test_*.py` |
+| `runtime/` | canonical orchestration, task registry, runtime state, services, and workflow adapters | `bootstrap.py`, `registry.py`, `tasks.py`, `services.py`, `config.py`, `runlog.py`, `adapters/*` |
+| `scripts/` | thin CLI execution paths over runtime or service surfaces | `update_data.py`, `put_data.py`, `dump_bin.py`, `predict.py`, `build_portfolio.py`, `view.py`, `eval_test.py` |
+| `model_function/` | reusable model-domain policy helpers for training/prediction universes and holding buffers | `universe.py` |
+| `data_pipeline/` | low-level BaoStock fetch provider and gateway HTTP client | `fetcher.py`, `database.py` |
+| `alpha_models/` | Qlib training workflow and workflow runner | `qlib_workflow.py`, `workflow/runner.py` |
+| `backtesting/` | portfolio construction and rebalance-order generation | `portfolio.py` |
+| `utils/` | shared helper utilities reused by runtime and scripts | `io.py`, `format.py`, `preprocess.py` |
+| `test/` | unit and integration-style verification surface | `test_*.py` |
+| `server/` | C++ gateway and database deployment assets | `main.cc`, `sql/*`, `docker/*` |
 
 ## 3. Usage
 
-Use this map to identify module ownership before opening detailed module nodes.
+Use this map to identify ownership before opening detailed module nodes. For
+pipeline dispatch or task ordering, start with `runtime/` rather than looking
+for deleted scheduler wrappers.

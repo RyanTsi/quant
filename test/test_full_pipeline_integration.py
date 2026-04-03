@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import patch
 
-from scheduler.pipelines import FULL_PIPELINE, run_pipeline
+from runtime.bootstrap import build_default_registry
 
 
 class TestFullPipelineIntegration(unittest.TestCase):
@@ -33,10 +33,10 @@ class TestFullPipelineIntegration(unittest.TestCase):
             def build_portfolio(self, **kwargs):
                 seen.append("portfolio")
 
-        with patch("scheduler.data_tasks.build_data_service", return_value=FakeDataService()):
-            with patch("scheduler.model_tasks.build_model_service", return_value=FakeModelService()):
-                with patch("time.sleep"):
-                    ok = run_pipeline(FULL_PIPELINE)
+        with patch("runtime.tasks.build_data_service", return_value=FakeDataService()):
+            with patch("runtime.tasks.build_model_service", return_value=FakeModelService()):
+                with patch.dict("os.environ", {"PIPELINE_COOLDOWN_SECONDS": "0"}, clear=False):
+                    ok = build_default_registry().run("full")
 
         self.assertTrue(ok)
         self.assertEqual(seen, ["fetch", "ingest", "export", "dump", "train", "predict", "portfolio"])

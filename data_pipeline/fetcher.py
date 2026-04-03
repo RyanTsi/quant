@@ -10,25 +10,10 @@ import pandas as pd
 
 import utils.format
 import utils.io
-from config.settings import settings
+from runtime.config import get_settings
 
 logger = logging.getLogger(__name__)
-
-
-def retry(max_retries=3, delay=2):
-    def decorator(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            for i in range(max_retries):
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    logger.warning("[%s] retry (%d/%d): %s", func.__name__, i + 1, max_retries, e)
-                    time.sleep(delay)
-            logger.error("[%s] failed after %d retries", func.__name__, max_retries)
-            return None
-        return wrapper
-    return decorator
+settings = get_settings()
 
 
 class StockDataFetcher:
@@ -36,10 +21,8 @@ class StockDataFetcher:
         self.data_path = settings.data_path
         stock_code_list_path = os.path.join(self.data_path, 'stock_code_list')
         index_code_list_path = os.path.join(self.data_path, 'index_code_list')
-        csi500_code_list_path = os.path.join(self.data_path, 'csi500_code_list')
         self.stock_code_list = utils.io.read_file_lines(stock_code_list_path)
         self.index_code_list = utils.io.read_file_lines(index_code_list_path)
-        self.csi500_code_list = utils.io.read_file_lines(csi500_code_list_path)
         self.period = 'daily'
         self.adjust = 'hfq'
         lg = bs.login()
@@ -65,7 +48,7 @@ class StockDataFetcher:
             return df
         return pd.DataFrame()
 
-    def fetch_list_stock_history(self, stock_code_list: list, start_date: str, end_date: str, save_dir: str = None):
+    def _fetch_list_stock_history(self, stock_code_list: list, start_date: str, end_date: str, save_dir: str = None):
         if save_dir is None:
             full_dir_path = os.path.join(self.data_path, f'{start_date}-{end_date}')
         else:
@@ -97,17 +80,13 @@ class StockDataFetcher:
             logger.warning("No stock code list loaded, skipping.")
             return
         stock_code_list = [utils.format.format_stock_code(c) for c in self.stock_code_list]
-        self.fetch_list_stock_history(stock_code_list, start_date, end_date, save_dir)
-
-    def fetch_csi500_stock_history(self, start_date: str, end_date: str, save_dir: str = None):
-        if not self.csi500_code_list:
-            return
-        self.fetch_list_stock_history(self.csi500_code_list, start_date, end_date, save_dir)
+        self._fetch_list_stock_history(stock_code_list, start_date, end_date, save_dir)
 
     def fetch_all_index_history(self, start_date: str, end_date: str, save_dir: str = None):
         if not self.index_code_list:
+            logger.warning("No index code list loaded, skipping.")
             return
-        self.fetch_list_stock_history(self.index_code_list, start_date, end_date, save_dir)
+        self._fetch_list_stock_history(self.index_code_list, start_date, end_date, save_dir)
 
     def rename_and_clean_df_columns(self, df):
         if df is None:

@@ -3,11 +3,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import qlib.contrib.model.pytorch_transformer_ts
-from config.settings import settings
 
 from alpha_models.workflow.runner import QlibWorkflowRunner
+from runtime.config import get_settings
+from runtime.runlog import record_run
 
-from utils.run_tracker import record_run
+settings = get_settings()
 
 def _default_config_path() -> str:
     return str(Path("alpha_models/workflow_config_transformer_Alpha158.yaml"))

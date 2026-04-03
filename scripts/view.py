@@ -17,8 +17,10 @@ from qlib.config import REG_CN
 from qlib.contrib.report import analysis_model, analysis_position
 from qlib.workflow import R
 
-from config.settings import settings
-from utils.run_tracker import get_last_run
+from runtime.config import get_settings
+from runtime.runlog import get_last_run
+
+settings = get_settings()
 
 
 def _resolve_recorder_ids(

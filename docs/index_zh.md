@@ -2,9 +2,12 @@
 
 ## 核心文档
 
-- 项目总览：[README](../README.md)
+- 项目总览（英文）：[README](../README.md)
+- 项目总览（中文）：[docs/README_zh.md](README_zh.md)
 - 架构说明（英文）：[ARCHITECTURE](../ARCHITECTURE.md)
 - 架构说明（中文）：[docs/ARCHITECTURE_zh.md](ARCHITECTURE_zh.md)
+- Runtime Guide（英文）：[docs/python-runtime-guide.md](python-runtime-guide.md)
+- Runtime Guide（中文）：[docs/python-runtime-guide_zh.md](python-runtime-guide_zh.md)
 - Navigation（英文）：[docs/NAVIGATION.md](NAVIGATION.md)
 - Navigation（中文）：[docs/NAVIGATION_zh.md](NAVIGATION_zh.md)
 
@@ -31,6 +34,9 @@
 - Python 运行时行为规格：
   - 英文：[docs/product-specs/python-runtime-v2.md](product-specs/python-runtime-v2.md)
   - 中文：[docs/product-specs/python-runtime-v2_zh.md](product-specs/python-runtime-v2_zh.md)
+- A 股股票池契约：
+  - 英文：[docs/product-specs/a-share-universe-contract.md](product-specs/a-share-universe-contract.md)
+  - 中文：[docs/product-specs/a-share-universe-contract_zh.md](product-specs/a-share-universe-contract_zh.md)
 
 ## 执行计划
 

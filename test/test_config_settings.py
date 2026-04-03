@@ -1,8 +1,10 @@
-"""Tests for config.settings singleton."""
+"""Tests for runtime.config singleton cache."""
 
 import unittest
 
-from config.settings import BASE_DIR, settings
+from runtime.config import BASE_DIR, get_settings
+
+settings = get_settings()
 
 
 class TestSettings(unittest.TestCase):

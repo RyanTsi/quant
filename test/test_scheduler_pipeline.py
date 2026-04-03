@@ -1,49 +1,58 @@
+import logging
 import unittest
 from unittest.mock import patch
 
-from scheduler.decorator import task, TaskFailed
-from scheduler.pipelines import run_pipeline
+from runtime.bootstrap import cooldown_seconds
+from runtime.contracts import TaskSpec
+from runtime.orchestrator import SequentialOrchestrator
+from runtime.registry import RuntimeRegistry
 
 
-class TestSchedulerPipeline(unittest.TestCase):
+class TestRuntimePipelineSemantics(unittest.TestCase):
     def test_pipeline_stops_on_failure(self):
         seen = []
 
-        @task("ok1")
         def ok1():
             seen.append("ok1")
 
-        @task("boom")
         def boom():
             seen.append("boom")
             raise RuntimeError("fail")
 
-        @task("ok2")
         def ok2():
             seen.append("ok2")
 
-        with patch("time.sleep") as _:
-            run_pipeline([ok1, boom, ok2])
+        registry = RuntimeRegistry(
+            task_map={"ok1": ok1, "boom": boom, "ok2": ok2},
+            pipeline_map={"demo": ["ok1", "boom", "ok2"]},
+            orchestrator=SequentialOrchestrator(
+                logger=logging.getLogger("test-runtime-pipeline"),
+                cooldown_provider=lambda: 0.0,
+            ),
+        )
+        ok = registry.run("demo")
 
+        self.assertFalse(ok)
         self.assertEqual(seen, ["ok1", "boom"])
 
     def test_pipeline_cooldown_called_between_tasks(self):
-        @task("ok1")
-        def ok1():
-            return None
+        orchestrator = SequentialOrchestrator(
+            logger=logging.getLogger("test-runtime-pipeline"),
+            cooldown_provider=lambda: 0.5,
+        )
+        with patch("time.sleep") as sleep:
+            result = orchestrator.run_pipeline(
+                "demo",
+                [TaskSpec(name="ok1", fn=lambda: None), TaskSpec(name="ok2", fn=lambda: None)],
+            )
 
-        @task("ok2")
-        def ok2():
-            return None
+        self.assertTrue(result.success)
+        sleep.assert_called_once_with(0.5)
 
-        with patch.dict("os.environ", {"PIPELINE_COOLDOWN_SECONDS": "0.5"}, clear=False):
-            with patch("time.sleep") as sleep:
-                run_pipeline([ok1, ok2])
-                sleep.assert_called_once()
-                args, _kwargs = sleep.call_args
-                self.assertAlmostEqual(args[0], 0.5, places=2)
+    def test_cooldown_seconds_prefers_env_override(self):
+        with patch.dict("os.environ", {"PIPELINE_COOLDOWN_SECONDS": "0.75"}, clear=False):
+            self.assertAlmostEqual(cooldown_seconds(), 0.75, places=2)
 
 
 if __name__ == "__main__":
     unittest.main()
-

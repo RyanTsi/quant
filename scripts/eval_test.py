@@ -23,9 +23,11 @@ from qlib.utils import init_instance_by_config
 from qlib.workflow import R
 from qlib.workflow.record_temp import SignalRecord
 
-from config.settings import settings
-from utils.run_tracker import get_last_run
 from alpha_models.workflow.runner import QlibWorkflowRunner
+from runtime.config import get_settings
+from runtime.runlog import get_last_run
+
+settings = get_settings()
 
 
 def _resolve_recorder_ids() -> Tuple[str, str]:
@@ -103,4 +105,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

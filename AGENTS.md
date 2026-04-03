@@ -92,3 +92,65 @@ MUST call another **subagent** to critically analyze the content of the log.
 - security, privacy, money, or data-loss risk is involved
 - architecture decisions affect multiple subsystems
 - the fix requires policy judgment outside the repo
+
+## Coding Standards
+
+### Readability — No Deep Nesting
+
+Max 3 levels of indentation inside a function. Use early returns, guard clauses, or extract helpers.
+
+```python
+# BAD
+def process(data):
+    if data:
+        for item in data:
+            if item.is_valid():
+                if item.price > 0:
+                    do_something(item)
+
+# GOOD
+def process(data):
+    if not data:
+        return
+    for item in data:
+        _process_single(item)
+
+def _process_single(item):
+    if not item.is_valid() or item.price <= 0:
+        return
+    do_something(item)
+```
+
+### Determinism — Handle All Nulls and Edge Cases
+
+Never assume inputs are valid. Every code path must be explicit.
+
+```python
+# BAD
+def get_return_rate(current, previous):
+    return (current - previous) / previous
+
+# GOOD
+def get_return_rate(current, previous):
+    if previous is None or previous == 0:
+        return None
+    return (current - previous) / previous
+```
+
+### Naming — Precise, Logical, Consistent
+
+- Functions: verb-first (`calculate_sharpe_ratio`, `fetch_daily_prices`)
+- Variables: describe what it IS, not its type (`is_stock_selected` not `flag_bool`, `closing_prices` not `price_list`)
+- Classes: noun, singular (`PortfolioOptimizer` not `OptHelper`)
+- Keep naming style consistent across the entire module.
+
+### Derivation First — Math Before Code
+
+For complex financial, geometric, or physical logic, write the mathematical basis or pseudocode in an English comment BEFORE the implementation.
+
+```python
+# Sharpe Ratio: S = (E[R] - Rf) / std(R)
+# where E[R] = mean of portfolio returns, Rf = risk-free rate
+def calculate_sharpe_ratio(returns, risk_free_rate):
+    ...
+```
