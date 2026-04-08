@@ -37,7 +37,7 @@ Python 侧当前采用 runtime-first 分层设计：
    - 这一层应保持足够薄，不重复实现核心逻辑
 
 3. 领域与基础设施层
-   - `model_function/`：可复用的模型域规则逻辑，例如确定性股票池构建、预测池规则和持仓缓冲
+   - `model_function/`：可复用的模型域逻辑，例如确定性股票池构建、预测数据集与 workflow 装配、recorder/模型访问以及分析 helper
    - `data_pipeline/`：底层 BaoStock 抓取 provider 与网关 HTTP 客户端
    - `alpha_models/`：Qlib 工作流与 workflow runner
    - `backtesting/`：组合构建与订单生成
@@ -67,7 +67,7 @@ Python 侧当前采用 runtime-first 分层设计：
 
 - `runtime.tasks.export_from_db()` 把全市场数据从网关导出到 `.data/receive_buffer/`。
 - `runtime.tasks.dump_to_qlib()` 将导出 CSV 转为 Qlib 二进制数据。
-- `runtime.tasks.predict()` 通过 direct-call 预测流程，结合 `model_function/universe.py` 中的确定性滞后流动性预测池规则，写出 `output/top_picks_<date>.csv`。
+- `runtime.tasks.predict()` 通过 direct-call 预测流程，结合 `model_function/universe.py` 中的确定性滞后流动性预测池规则，以及 `model_function/qlib.py` 中共享的 recorder/模型与数据集装配 helper，写出 `output/top_picks_<date>.csv`。
 - `runtime.tasks.build_portfolio()` 读取预测结果，应用 `model_function/universe.py` 中的显式买入/持有缓冲规则，再写出目标权重与调仓订单。
 
 ### 全流程流水线
@@ -75,8 +75,8 @@ Python 侧当前采用 runtime-first 分层设计：
 `fetch -> ingest -> export -> dump -> train -> predict -> portfolio`
 
 - `runtime.tasks.train_model()` 通过 `ModelPipelineService.train_model()` 调用 Qlib 工作流。
-- 训练流程会记录 `qlib_train` 元数据，供后续预测、评估和可视化命令使用。
-- 训练成功后还会通过 `scripts.view.generate_view` 自动生成 view。
+- `ModelPipelineService.train_model()` 会在工作流成功完成后记录 `qlib_train` 元数据，供后续预测、评估和可视化命令使用。
+- 训练成功后还会通过共享的 `model_function/qlib.py` 分析 helper 自动生成 view，而 `scripts/view.py` 继续保持为薄包装。
 - 测试集评估仍是独立操作命令（`scripts.eval_test`）。
 
 ## 4. 配置与状态

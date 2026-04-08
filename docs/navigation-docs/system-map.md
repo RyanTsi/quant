@@ -27,7 +27,7 @@ graph TD
 |---|---|---|
 | `runtime/` | canonical orchestration, task registry, runtime state, services, and workflow adapters | `bootstrap.py`, `registry.py`, `tasks.py`, `services.py`, `config.py`, `runlog.py`, `adapters/*` |
 | `scripts/` | thin CLI execution paths over runtime or service surfaces | `update_data.py`, `put_data.py`, `dump_bin.py`, `predict.py`, `build_portfolio.py`, `view.py`, `eval_test.py` |
-| `model_function/` | reusable model-domain policy helpers for training/prediction universes and holding buffers | `universe.py` |
+| `model_function/` | reusable model-domain helpers for universe policy, shared Qlib workflow assembly, recorder/model access, and analysis | `universe.py`, `qlib.py` |
 | `data_pipeline/` | low-level BaoStock fetch provider and gateway HTTP client | `fetcher.py`, `database.py` |
 | `alpha_models/` | Qlib training workflow and workflow runner | `qlib_workflow.py`, `workflow/runner.py` |
 | `backtesting/` | portfolio construction and rebalance-order generation | `portfolio.py` |

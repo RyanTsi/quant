@@ -75,6 +75,7 @@
   - `failed_symbols`
   - `partial_symbols`
 - 关键行为：
+  - export 会优先使用 `.data/stock_code_list`、`.data/index_code_list` 与 `.data/qlib_data/instruments/all.txt` 中的本地代码清单；只有这些工件都不可用时，才回退到 `GET /api/v1/symbols`
   - `failed_symbols` 表示该 symbol 完全没有导出产物
   - `partial_symbols` 表示 CSV 已写出，但后续分页失败
 
@@ -98,29 +99,32 @@
 ### Train
 
 - 入口：`main.py --run train`
-- 运行路径：`runtime.tasks.train_model()` -> `ModelPipelineService.train_model()` -> `alpha_models.qlib_workflow.main()`
+- 运行路径：`runtime.tasks.train_model()` -> `ModelPipelineService.train_model()` -> `alpha_models.qlib_workflow.run_training()`
 - 关键行为：
-  - Qlib 工作流会记录 `qlib_train` 元数据，供后续预测、评估和可视化命令使用
+  - `ModelPipelineService` 会记录 `qlib_train` 元数据，供后续预测、评估和可视化命令使用
   - runtime service 也会记录一个 `train_model` 执行日期项
   - 训练成功后还会基于生成的 experiment/recorder id 自动调用训练后 view 生成器
 
 ### Predict
 
 - 入口：`main.py --run predict`、`python -m scripts.predict`
-- 规范实现：`runtime/adapters/modeling.generate_predictions`
+- 规范实现：`runtime/services.ModelPipelineService.predict()` -> `runtime/adapters/modeling.generate_predictions`
 - 关键行为：
   - 若未传 `--date`，默认使用本地最新交易日
   - 当同时设置 `QLIB_RECORDER_ID` 和 `QLIB_EXPERIMENT_ID` 时优先用环境变量选模型，否则回退到 `run_history.json -> qlib_train`
+  - 如果环境变量和 `qlib_train` history 都不存在，预测会直接报出“先训练模型”的操作错误
   - 默认输出文件为 `output/top_picks_<date>.csv`
 
 ### Portfolio
 
 - 入口：`main.py --run portfolio`、`python -m scripts.build_portfolio`
-- 规范实现：`runtime/adapters/modeling.build_portfolio_outputs`
+- 规范实现：`runtime/services.ModelPipelineService.build_portfolio()` -> `runtime/adapters/modeling.build_portfolio_outputs`
 - 关键行为：
+  - 若未传 `--date`，默认使用本地最新交易日
   - 输入文件为 `output/top_picks_<date>.csv`
   - 输出文件为 `output/target_weights_<date>.csv` 与 `output/orders_<date>.csv`
-  - `build_portfolio` history 会记录 picks 文件、输出文件和订单摘要统计
+  - 持仓连续性会读取前一个本地交易日的 `target_weights_<prev_date>.csv`，而不是前一个自然日
+  - 正常操作路径下，`build_portfolio` history 会在 service 边界记录 picks 文件、输出文件和订单摘要统计
 
 ## 4. 常用命令
 
@@ -171,8 +175,10 @@ conda run -n quant python -m unittest discover -s test -p 'test_*.py'
   - 说明 `send_buffer_dir` 缺失；先重新执行 fetch，或者把 `scripts.put_data --data_dir` 指向有效 CSV 目录。
 - export 结果里出现 `partial_symbols`：
   - 说明 CSV 已生成，但部分分页失败，对应 symbol 数据不完整。
+- export 在拉取 symbol 列表时卡住或失败：
+  - runtime 现在会优先使用本地代码清单，只有本地工件不可用时才访问 `GET /api/v1/symbols`；但如果本地代码清单过旧，仍可能漏掉最新入库的 symbol；此时先重新执行 `fetch`。
 - predict 报 `No trained model found`：
-  - 需要先设置 `QLIB_RECORDER_ID` 和 `QLIB_EXPERIMENT_ID`，或者先执行 `train` 让 `qlib_train` history 落盘。
+  - 需要先设置 `QLIB_RECORDER_ID` 和 `QLIB_EXPERIMENT_ID`，或者先执行 `train`，让 `ModelPipelineService` 写入 `qlib_train` history。
 - fetch 脚本打印 `Packed data directory`：
   - 这里指的是打包后的入库目录（`send_buffer_dir`），不是原始抓取目录。
 

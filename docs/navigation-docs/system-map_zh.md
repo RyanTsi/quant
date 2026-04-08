@@ -26,7 +26,7 @@ graph TD
 |---|---|---|
 | `runtime/` | 规范编排、任务注册、运行时状态、services 与 workflow adapters | `bootstrap.py`, `registry.py`, `tasks.py`, `services.py`, `config.py`, `runlog.py`, `adapters/*` |
 | `scripts/` | 基于 runtime 或 service 表面的薄 CLI 路径 | `update_data.py`, `put_data.py`, `dump_bin.py`, `predict.py`, `build_portfolio.py`, `view.py`, `eval_test.py` |
-| `model_function/` | 训练/预测股票池与持仓缓冲等模型域规则的复用 helper | `universe.py` |
+| `model_function/` | 股票池规则、共享 Qlib workflow 装配、recorder/模型访问与分析等模型域 helper | `universe.py`, `qlib.py` |
 | `data_pipeline/` | 底层 BaoStock 抓取 provider 与网关 HTTP 客户端 | `fetcher.py`, `database.py` |
 | `alpha_models/` | Qlib 训练工作流与 workflow runner | `qlib_workflow.py`, `workflow/runner.py` |
 | `backtesting/` | 组合构建与调仓订单生成 | `portfolio.py` |

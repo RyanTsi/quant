@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
-from unittest.mock import MagicMock
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
@@ -86,6 +87,87 @@ class TestExportFromGateway(unittest.TestCase):
                     end_date="2026-04-01",
                     output_dir=tmpdir,
                 )
+
+    def test_load_local_symbol_fallbacks_supports_plain_and_qlib_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stock_list = Path(tmpdir) / "stock_code_list"
+            index_list = Path(tmpdir) / "index_code_list"
+            instrument_file = Path(tmpdir) / "all.txt"
+
+            stock_list.write_text("sh600000\nSZ000001\n", encoding="utf-8")
+            index_list.write_text("SH000001\n", encoding="utf-8")
+            instrument_file.write_text("SZ000001\t2010-01-01\t2026-04-01\nsz300001\t2010-01-01\t2026-04-01\n", encoding="utf-8")
+
+            symbols = exporting.load_local_symbol_fallbacks(
+                [stock_list, index_list, instrument_file, Path(tmpdir) / "missing.txt"]
+            )
+
+            self.assertEqual(symbols, ["SH600000", "SZ000001", "SH000001", "SZ300001"])
+
+    def test_export_from_gateway_falls_back_to_local_symbols_when_list_symbols_fails(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stock_list = Path(tmpdir) / "stock_code_list"
+            stock_list.write_text("SH600000\n", encoding="utf-8")
+            client = MagicMock()
+            client.health.return_value = {"status": "healthy"}
+            client.list_symbols.return_value = None
+            logger = MagicMock()
+
+            with patch("runtime.adapters.exporting.export_symbol_csvs") as mock_export:
+                mock_export.return_value = {
+                    "output_dir": tmpdir,
+                    "exported": 1,
+                    "total": 1,
+                    "failed_symbols": [],
+                    "partial_symbols": [],
+                }
+
+                result = exporting.export_from_gateway(
+                    client,
+                    start_date="2026-01-01",
+                    end_date="2026-04-01",
+                    output_dir=tmpdir,
+                    logger=logger,
+                    symbol_fallback_paths=[stock_list],
+                )
+
+            self.assertEqual(result["total"], 1)
+            self.assertEqual(mock_export.call_args.kwargs["symbols"], ["SH600000"])
+            logger.warning.assert_any_call(
+                "  Falling back to %d locally discovered symbols because gateway symbol listing failed.",
+                1,
+            )
+
+    def test_export_from_gateway_prefers_local_symbols_when_requested(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stock_list = Path(tmpdir) / "stock_code_list"
+            stock_list.write_text("SH600000\n", encoding="utf-8")
+            client = MagicMock()
+            client.health.return_value = {"status": "healthy"}
+            logger = MagicMock()
+
+            with patch("runtime.adapters.exporting.export_symbol_csvs") as mock_export:
+                mock_export.return_value = {
+                    "output_dir": tmpdir,
+                    "exported": 1,
+                    "total": 1,
+                    "failed_symbols": [],
+                    "partial_symbols": [],
+                }
+
+                exporting.export_from_gateway(
+                    client,
+                    start_date="2026-01-01",
+                    end_date="2026-04-01",
+                    output_dir=tmpdir,
+                    logger=logger,
+                    symbol_fallback_paths=[stock_list],
+                    prefer_local_symbol_fallback=True,
+                )
+
+            client.list_symbols.assert_not_called()
+            self.assertEqual(mock_export.call_args.kwargs["symbols"], ["SH600000"])
+            logger.info.assert_any_call("  Using %d locally discovered symbols for export.", 1)
 
     def test_export_from_gateway_writes_normalized_csv_and_tracks_failed_symbols(self):
         with tempfile.TemporaryDirectory() as tmpdir:

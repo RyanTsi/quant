@@ -11,13 +11,16 @@ from runtime.adapters.exporting import export_from_gateway
 from runtime.adapters.fetching import fetch_and_package_market_data
 from runtime.adapters.ingest import ingest_directory
 from runtime.config import AppSettings, get_settings
+from runtime.model_state import ModelRuntimeState, build_model_runtime_state
 from runtime.runlog import RunLogStore
 
 
-def _run_qlib_training() -> None:
-    from alpha_models.qlib_workflow import main as qlib_main
+def _run_qlib_training(runtime_state: ModelRuntimeState):
+    """Run the Qlib training workflow through the shared workflow wrapper."""
 
-    qlib_main()
+    from alpha_models.qlib_workflow import run_training
+
+    return run_training(runtime_state=runtime_state)
 
 
 class DataPipelineService:
@@ -66,12 +69,19 @@ class DataPipelineService:
         """Export all symbols from DB to per-symbol CSV files in receive buffer."""
         end_date = datetime.now().strftime("%Y-%m-%d")
         client = DBClient(self.settings.db_host, self.settings.db_port)
+        symbol_fallback_paths = (
+            os.path.join(self.settings.data_path, "stock_code_list"),
+            os.path.join(self.settings.data_path, "index_code_list"),
+            os.path.join(self.settings.qlib_data_path, "instruments", "all.txt"),
+        )
         result = export_from_gateway(
             client,
             start_date=start_date,
             end_date=end_date,
             output_dir=self.settings.receive_buffer_path,
             logger=self.logger,
+            symbol_fallback_paths=symbol_fallback_paths,
+            prefer_local_symbol_fallback=True,
         )
         failed_symbols = list(result.get("failed_symbols", []))
         partial_symbols = list(result.get("partial_symbols", []))
@@ -99,6 +109,7 @@ class ModelPipelineService:
     def __init__(self, settings: AppSettings, *, history: RunLogStore | None = None):
         self.settings = settings
         self.history = history or RunLogStore(os.path.join(settings.data_path, "run_history.json"))
+        self.runtime_state = build_model_runtime_state(settings=settings, history=self.history)
 
     @staticmethod
     def _today_dash() -> str:
@@ -158,8 +169,21 @@ class ModelPipelineService:
             "symbol_count": int(result.get("symbol_count", 0)),
         }
 
-    def predict(self) -> dict[str, Any]:
-        result = modeling.generate_predictions()
+    def predict(
+        self,
+        *,
+        date: str | None = None,
+        out: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate predictions while keeping recorder resolution at the service boundary."""
+
+        recorder_identity = self.runtime_state.resolve_recorder_identity()
+        result = modeling.generate_predictions(
+            date=date,
+            out=out,
+            runtime_state=self.runtime_state,
+            recorder_identity=recorder_identity,
+        )
         self.history.record("predict", **self._predict_history_payload(result))
         return result
 
@@ -184,13 +208,34 @@ class ModelPipelineService:
         self.history.record("filter_training_universe", **self._training_universe_history_payload(result))
         return result
 
-    def build_portfolio(self) -> dict[str, Any]:
-        result = modeling.build_portfolio_outputs(track_run=False)
+    def build_portfolio(
+        self,
+        *,
+        date: str | None = None,
+        top_k: int = 80,
+        max_weight: float = 0.02,
+        rebalance_threshold: float = 0.002,
+        buy_rank: int = modeling.HOLDING_BUFFER_DEFAULTS.buy_rank,
+        hold_rank: int = modeling.HOLDING_BUFFER_DEFAULTS.hold_rank,
+    ) -> dict[str, Any]:
+        """Build portfolio artifacts while keeping run-history writes at the service boundary."""
+
+        result = modeling.build_portfolio_outputs(
+            date=date,
+            top_k=top_k,
+            max_weight=max_weight,
+            rebalance_threshold=rebalance_threshold,
+            buy_rank=buy_rank,
+            hold_rank=hold_rank,
+            track_run=False,
+            runtime_state=self.runtime_state,
+        )
         self.history.record("build_portfolio", **self._portfolio_history_payload(result))
         return result
 
     def train_model(self) -> dict[str, str]:
-        _run_qlib_training()
+        result = _run_qlib_training(self.runtime_state)
+        self.runtime_state.record_training_result(result)
         self.history.record("train_model", date=self._today_dash())
         return {"date": self._today_dash()}
 

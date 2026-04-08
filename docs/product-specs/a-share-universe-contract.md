@@ -65,7 +65,7 @@ This document freezes the incumbent universe behavior and the redesigned contrac
   - exit band: top 1200 by lagged liquidity
 - Retention rule:
   - all entry-band names are scored
-  - previous holdings from `target_weights_<prev_date>.csv` are also scored if they remain inside the exit band
+  - previous holdings from the previous trading day's `target_weights_<prev_date>.csv` are also scored if they remain inside the exit band
 - Determinism rule:
   - no random sampling is allowed in prediction-pool construction
 
@@ -73,6 +73,8 @@ This document freezes the incumbent universe behavior and the redesigned contrac
 
 - Buy band: top 300 by model score.
 - Hold band: top 500 by model score for symbols already present in the previous target portfolio.
+- Continuity source:
+  - the previous target portfolio is loaded from the previous trading day's `target_weights_<prev_date>.csv`
 - Final capacity:
   - after applying buy/hold bands, the existing `top_k` portfolio cap is applied
   - default `top_k` remains 80 unless overridden by CLI/runtime arguments

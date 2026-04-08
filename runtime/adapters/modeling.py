@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,11 @@ from backtesting.portfolio import (
     summarize_orders,
 )
 from data_pipeline.database import DBClient
+from model_function.qlib import (
+    RecorderIdentity,
+    build_alpha158_prediction_dataset_config,
+    load_trained_model,
+)
 from model_function.universe import (
     HOLDING_BUFFER_DEFAULTS,
     PREDICTION_UNIVERSE_DEFAULTS,
@@ -22,18 +28,20 @@ from model_function.universe import (
     build_prediction_pool_from_features,
     resolve_training_universe_output_path,
 )
-from runtime.config import get_settings
-from runtime.runlog import get_last_run, record_run
+from runtime.model_state import ModelRuntimeState, build_model_runtime_state
 import utils.io as io_utils
-from utils.preprocess import (
-    ALPHA158_WEIGHTED_5D_LABEL,
-    read_symbol_list,
-)
-
-settings = get_settings()
+from utils.preprocess import read_symbol_list
 
 DEFAULT_DUMP_INCLUDE_FIELDS = "open,high,low,close,volume,amount,turn,isST,factor"
 DEFAULT_DUMP_FILE_SUFFIX = ".csv"
+
+
+@dataclass(frozen=True)
+class TradingDateContext:
+    """Resolved trading-day context for model artifact generation."""
+
+    trading_date: str
+    previous_trading_date: str | None
 
 
 def _get_qlib_runtime():
@@ -108,12 +116,16 @@ def build_training_universe_file(
 ) -> dict[str, Any]:
     """Build the training-universe instrument file through the shared model helper."""
 
-    data_root = Path(data_path) if data_path is not None else Path(settings.data_path)
-    qlib_root = Path(qlib_dir) if qlib_dir is not None else Path(settings.qlib_data_path)
+    runtime_state = build_model_runtime_state()
+    data_root = Path(data_path) if data_path is not None else Path(runtime_state.settings.data_path)
+    qlib_root = Path(qlib_dir) if qlib_dir is not None else Path(runtime_state.settings.qlib_data_path)
     output_path = resolve_training_universe_output_path(data_path=data_root, qlib_data_path=qlib_root)
     all_stock_list = io_utils.read_file_lines(str(data_root / "stock_code_list"))
     index_symbols = read_symbol_list(data_root / "index_code_list")
-    client = DBClient(db_host or settings.db_host, db_port or settings.db_port)
+    client = DBClient(
+        db_host or runtime_state.settings.db_host,
+        db_port or runtime_state.settings.db_port,
+    )
     query_start = f"{int(start_year)}-01-01"
     query_end = pd.Timestamp(f"{int(end_year)}-12-31").strftime("%Y-%m-%d")
 
@@ -134,53 +146,60 @@ def build_training_universe_file(
     )
 
 
-def get_predict_conf(start_date, end_date, instruments):
-    return {
-        "class": "TSDatasetH",
-        "module_path": "qlib.data.dataset",
-        "kwargs": {
-            "handler": {
-                "class": "Alpha158",
-                "module_path": "qlib.contrib.data.handler",
-                "kwargs": {
-                    "start_time": start_date,
-                    "end_time": end_date,
-                    "fit_start_time": start_date,
-                    "fit_end_time": end_date,
-                    "instruments": instruments,
-                    "infer_processors": [
-                        {"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}},
-                        {"class": "Fillna", "kwargs": {"fields_group": "feature"}},
-                    ],
-                    "learn_processors": [
-                        {"class": "DropnaLabel"},
-                        {"class": "CSRankNorm", "kwargs": {"fields_group": "label"}},
-                    ],
-                    "label": [ALPHA158_WEIGHTED_5D_LABEL],
-                },
-            },
-            "segments": {
-                "test": [end_date, end_date],
-            },
-            "step_len": 20,
-        },
-    }
+def get_predict_conf(start_date: str, end_date: str, instruments: list[str]) -> dict[str, Any]:
+    """Return the shared Alpha158 prediction dataset config used by runtime scoring."""
+
+    return build_alpha158_prediction_dataset_config(start_date, end_date, instruments)
 
 
-def _resolve_predict_date(calendar, date_str: str | None):
+def _calendar_to_strings(calendar) -> list[str]:
+    """Normalize Qlib calendar values to stable trading-day strings."""
+
     if calendar is None or len(calendar) == 0:
         raise RuntimeError("Empty Qlib calendar. Check your provider_uri and dumped data.")
+    return [pd.Timestamp(value).strftime("%Y-%m-%d") for value in calendar]
+
+
+def _resolve_trading_date_context(calendar, date_str: str | None) -> TradingDateContext:
+    """Resolve an execution date and its previous trading day from the local calendar."""
+
+    cal_str = _calendar_to_strings(calendar)
     if not date_str:
-        return pd.Timestamp(calendar[-1]).strftime("%Y-%m-%d")
-    target = pd.Timestamp(date_str).strftime("%Y-%m-%d")
-    cal_str = [pd.Timestamp(x).strftime("%Y-%m-%d") for x in calendar]
+        trading_date = cal_str[-1]
+    else:
+        trading_date = pd.Timestamp(date_str).strftime("%Y-%m-%d")
+    target = trading_date
     if target not in cal_str:
         raise ValueError(f"Date {target} not in local trading calendar (available: {cal_str[0]} ... {cal_str[-1]}).")
-    return target
+    index = cal_str.index(target)
+    previous_trading_date = cal_str[index - 1] if index > 0 else None
+    return TradingDateContext(
+        trading_date=target,
+        previous_trading_date=previous_trading_date,
+    )
+
+
+def _resolve_execution_trading_context(
+    *,
+    date: str | None,
+    runtime_state: ModelRuntimeState | None = None,
+    provider_uri: str | None = None,
+) -> TradingDateContext:
+    """Load the local trading calendar through the runtime-owned provider boundary."""
+
+    resolved_runtime_state = runtime_state or build_model_runtime_state()
+    settings = resolved_runtime_state.settings
+    qlib, reg_cn, _, _ = _get_qlib_runtime()
+    d_client = _get_qlib_data_client()
+    qlib.init(provider_uri=provider_uri or settings.qlib_provider_uri, region=reg_cn)
+    calendar = d_client.calendar(freq="day")
+    return _resolve_trading_date_context(calendar, date)
 
 
 def _lookback_start(calendar, end_date: str, lookback: int = 120) -> str:
-    cal_str = [pd.Timestamp(x).strftime("%Y-%m-%d") for x in calendar]
+    """Return the first trading day inside the requested lookback window."""
+
+    cal_str = _calendar_to_strings(calendar)
     end_date_str = pd.Timestamp(end_date).strftime("%Y-%m-%d")
     idx = cal_str.index(end_date_str)
     start_idx = max(0, idx - lookback)
@@ -188,25 +207,21 @@ def _lookback_start(calendar, end_date: str, lookback: int = 120) -> str:
 
 
 def _trading_index(calendar, target_date: str) -> int:
-    cal_str = [pd.Timestamp(x).strftime("%Y-%m-%d") for x in calendar]
+    """Return the calendar index for a normalized trading day."""
+
+    cal_str = _calendar_to_strings(calendar)
     return cal_str.index(pd.Timestamp(target_date).strftime("%Y-%m-%d"))
 
 
-def _resolve_recorder_ids() -> tuple[str, str]:
-    env_recorder_id = os.getenv("QLIB_RECORDER_ID")
-    env_experiment_id = os.getenv("QLIB_EXPERIMENT_ID")
+def _resolve_recorder_ids(
+    runtime_state: ModelRuntimeState,
+    *,
+    recorder_identity: RecorderIdentity | None = None,
+) -> tuple[str, str]:
+    """Preserve the adapter's historical `(recorder_id, experiment_id)` return order."""
 
-    if env_recorder_id and env_experiment_id:
-        return str(env_recorder_id), str(env_experiment_id)
-
-    last = get_last_run("qlib_train")
-    if not last:
-        raise RuntimeError("No trained model found: run_history.json.qlib_train is empty.")
-    recorder_id = last.get("recorder_id")
-    experiment_id = last.get("experiment_id")
-    if not recorder_id or not experiment_id:
-        raise RuntimeError("No trained model found: missing recorder_id/experiment_id in run_history.json.qlib_train.")
-    return str(recorder_id), str(experiment_id)
+    identity = recorder_identity or runtime_state.resolve_recorder_identity(env=os.environ)
+    return identity.recorder_id, identity.experiment_id
 
 
 def _build_today_pool(
@@ -217,13 +232,17 @@ def _build_today_pool(
     data_path: str | Path | None = None,
     output_dir: str | Path = "output",
 ) -> list[str]:
+    """Build the deterministic prediction pool for one resolved trading day."""
+
     del seed  # Prediction universe is deterministic under the redesigned contract.
     d_client = _get_qlib_data_client()
-    data_root = Path(data_path) if data_path is not None else Path(settings.data_path)
+    runtime_state = build_model_runtime_state()
+    data_root = Path(data_path) if data_path is not None else Path(runtime_state.settings.data_path)
     output_root = Path(output_dir)
 
     index_symbols = read_symbol_list(data_root / "index_code_list")
-    idx = _trading_index(calendar, predict_date)
+    date_context = _resolve_trading_date_context(calendar, predict_date)
+    idx = _trading_index(calendar, date_context.trading_date)
     lookback_days = max(1, int(PREDICTION_UNIVERSE_DEFAULTS.liquidity_lookback_days))
     lookback_start_idx = max(0, idx - (lookback_days - 1))
     start = pd.Timestamp(calendar[lookback_start_idx]).strftime("%Y-%m-%d")
@@ -239,9 +258,8 @@ def _build_today_pool(
         raise RuntimeError("No feature data available to build prediction pool.")
 
     previous_holdings: list[str] = []
-    if idx > 0:
-        prev_date = pd.Timestamp(calendar[idx - 1]).strftime("%Y-%m-%d")
-        prev_target_path = output_root / f"target_weights_{prev_date}.csv"
+    if date_context.previous_trading_date is not None:
+        prev_target_path = output_root / f"target_weights_{date_context.previous_trading_date}.csv"
         prev_target_df = _read_csv_if_available(prev_target_path)
         if prev_target_df is not None and "instrument" in prev_target_df.columns and not prev_target_df.empty:
             previous_holdings = prev_target_df["instrument"].astype(str).tolist()
@@ -287,7 +305,13 @@ def generate_predictions(
     output_dir: str | Path = "output",
     provider_uri: str | None = None,
     mlruns_uri: str | None = None,
+    runtime_state: ModelRuntimeState | None = None,
+    recorder_identity: RecorderIdentity | None = None,
 ) -> dict[str, Any]:
+    """Generate prediction artifacts for one resolved trading day."""
+
+    resolved_runtime_state = runtime_state or build_model_runtime_state()
+    settings = resolved_runtime_state.settings
     qlib, reg_cn, recorder_client, init_instance_by_config = _get_qlib_runtime()
     d_client = _get_qlib_data_client()
 
@@ -296,7 +320,8 @@ def generate_predictions(
         recorder_client.set_uri(mlruns_uri or settings.qlib_mlruns_uri)
 
     all_calendar = d_client.calendar(freq="day")
-    predict_date = _resolve_predict_date(all_calendar, date)
+    date_context = _resolve_trading_date_context(all_calendar, date)
+    predict_date = date_context.trading_date
     lookback_start = _lookback_start(all_calendar, predict_date, lookback=120)
     pool_symbols = _build_today_pool(
         all_calendar,
@@ -306,12 +331,12 @@ def generate_predictions(
         output_dir=output_dir,
     )
 
-    recorder_id, experiment_id = _resolve_recorder_ids()
+    recorder_id, experiment_id = _resolve_recorder_ids(
+        resolved_runtime_state,
+        recorder_identity=recorder_identity,
+    )
     recorder = recorder_client.get_recorder(recorder_id=recorder_id, experiment_id=experiment_id)
-    try:
-        model = recorder.load_object("trained_model")
-    except Exception:
-        model = recorder.load_object("params.pkl")
+    model = load_trained_model(recorder, artifact_keys=("trained_model", "params.pkl"))
 
     predict_dataset_conf = get_predict_conf(lookback_start, predict_date, instruments=pool_symbols)
     dataset = init_instance_by_config(predict_dataset_conf)
@@ -333,13 +358,9 @@ def generate_predictions(
     }
 
 
-def _resolve_date(args_date: str | None) -> str:
-    if args_date:
-        return pd.Timestamp(args_date).strftime("%Y-%m-%d")
-    return pd.Timestamp.today().strftime("%Y-%m-%d")
-
-
 def _normalize_picks_columns(picks_df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize common script-side pick CSV column names for portfolio construction."""
+
     normalized = picks_df.copy()
     if "instrument" not in normalized.columns:
         first_col = normalized.columns[0]
@@ -362,8 +383,16 @@ def build_portfolio_outputs(
     hold_rank: int = HOLDING_BUFFER_DEFAULTS.hold_rank,
     output_dir: str | Path = "output",
     track_run: bool = True,
+    runtime_state: ModelRuntimeState | None = None,
 ) -> dict[str, Any]:
-    date_str = _resolve_date(date)
+    """Build target weights and rebalance orders for one resolved trading day."""
+
+    resolved_runtime_state = runtime_state or build_model_runtime_state()
+    date_context = _resolve_execution_trading_context(
+        date=date,
+        runtime_state=resolved_runtime_state,
+    )
+    date_str = date_context.trading_date
     output_root = Path(output_dir)
     picks_path = output_root / f"top_picks_{date_str}.csv"
     if not picks_path.exists():
@@ -372,9 +401,10 @@ def build_portfolio_outputs(
         raise ValueError("hold_rank must be greater than or equal to buy_rank.")
 
     picks_df = _normalize_picks_columns(pd.read_csv(picks_path))
-    prev_date = (pd.Timestamp(date_str) - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-    prev_target_path = output_root / f"target_weights_{prev_date}.csv"
-    current_df = _read_csv_if_available(prev_target_path)
+    current_df = None
+    if date_context.previous_trading_date is not None:
+        prev_target_path = output_root / f"target_weights_{date_context.previous_trading_date}.csv"
+        current_df = _read_csv_if_available(prev_target_path)
 
     current_instruments = []
     if current_df is not None and "instrument" in current_df.columns:
@@ -403,7 +433,7 @@ def build_portfolio_outputs(
 
     stats = summarize_orders(orders_df)
     if track_run:
-        record_run(
+        resolved_runtime_state.history.record(
             "build_portfolio",
             date=date_str,
             picks_file=str(picks_path),

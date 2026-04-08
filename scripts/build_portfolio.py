@@ -8,10 +8,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from runtime.adapters.modeling import build_portfolio_outputs
+
+from runtime.services import build_model_service
 
 
 def main() -> None:
+    """Parse CLI args, delegate portfolio construction to the runtime service, and print outputs."""
+
     parser = argparse.ArgumentParser(description="Build target portfolio and rebalance orders")
     parser.add_argument("--date", type=str, default=None, help="Prediction date YYYY-MM-DD")
     parser.add_argument("--top_k", type=int, default=80, help="Top-k picks for portfolio construction")
@@ -22,7 +25,8 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        result = build_portfolio_outputs(
+        model_service = build_model_service(refresh_settings=True)
+        result = model_service.build_portfolio(
             date=args.date,
             top_k=args.top_k,
             buy_rank=args.buy_rank,

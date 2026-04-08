@@ -128,6 +128,15 @@ class TestDataPipelineService(unittest.TestCase):
         self.assertEqual(call_kwargs["start_date"], "2026-01-01")
         self.assertEqual(call_kwargs["output_dir"], self.settings.receive_buffer_path)
         self.assertEqual(call_kwargs["logger"], self.service.logger)
+        self.assertEqual(
+            call_kwargs["symbol_fallback_paths"],
+            (
+                os.path.join(self.settings.data_path, "stock_code_list"),
+                os.path.join(self.settings.data_path, "index_code_list"),
+                os.path.join(self.settings.qlib_data_path, "instruments", "all.txt"),
+            ),
+        )
+        self.assertTrue(call_kwargs["prefer_local_symbol_fallback"])
         self.assertRegex(call_kwargs["end_date"], r"^\d{4}-\d{2}-\d{2}$")
 
         self.assertEqual(result["exported"], 1)

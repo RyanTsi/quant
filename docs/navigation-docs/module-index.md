@@ -9,7 +9,7 @@ This file provides module-level navigation nodes for the current repository.
 | `runtime-node` | canonical runtime orchestration, task dispatch, and run state | `runtime/bootstrap.py`, `runtime/registry.py`, `runtime/tasks.py`, `runtime/orchestrator.py`, `runtime/runlog.py`, `runtime/constants.py` |
 | `config-node` | env/config behavior | `runtime/config.py` |
 | `data-node` | data fetch, package, ingest, and export behavior | `runtime/adapters/fetching.py`, `runtime/adapters/ingest.py`, `runtime/adapters/exporting.py`, `runtime/services.py`, `data_pipeline/fetcher.py`, `data_pipeline/database.py` |
-| `model-node` | stock-universe, dump, train, predict, portfolio, and model-eval behavior | `model_function/universe.py`, `runtime/adapters/modeling.py`, `runtime/adapters/dump_bin_core.py`, `runtime/services.py`, `alpha_models/qlib_workflow.py`, `alpha_models/workflow/runner.py`, `scripts/filter.py`, `scripts/predict.py`, `scripts/build_portfolio.py`, `scripts/view.py`, `scripts/eval_test.py` |
+| `model-node` | stock-universe, dump, train, predict, portfolio, and model-eval behavior | `model_function/universe.py`, `model_function/qlib.py`, `runtime/adapters/modeling.py`, `runtime/adapters/dump_bin_core.py`, `runtime/services.py`, `alpha_models/qlib_workflow.py`, `alpha_models/workflow/runner.py`, `scripts/filter.py`, `scripts/predict.py`, `scripts/build_portfolio.py`, `scripts/view.py`, `scripts/eval_test.py` |
 | `cli-node` | operator-facing entrypoints and script wrappers | `main.py`, `scripts/update_data.py`, `scripts/put_data.py`, `scripts/dump_bin.py`, `scripts/predict.py`, `scripts/build_portfolio.py` |
 | `utils-node` | leaf helper behavior | `utils/io.py`, `utils/format.py`, `utils/preprocess.py` |
 | `test-node` | verification surface | `test/test_*.py` |
@@ -33,5 +33,5 @@ graph LR
 - `runtime-node` is the default entry for current Python runtime work.
 - `cli-node` should stay thin; if behavior looks substantial, continue downward into `runtime-node`, `data-node`, or `model-node`.
 - Runtime-owned services and adapters are now the only supported starting points for former compatibility-owned behavior.
-- Model-domain universe policy now lives in `model_function/universe.py`; use that before duplicating pool or holding-buffer logic inside adapters or scripts.
+- Model-domain universe policy now lives in `model_function/universe.py`, and shared Qlib training/eval/view helpers now live in `model_function/qlib.py`; use those before duplicating logic inside adapters or scripts.
 - For data-side work, start in `runtime/adapters/*` or `runtime/services.py` before touching lower-level providers.

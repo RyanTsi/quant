@@ -11,9 +11,9 @@ from scripts import build_portfolio, filter as filter_script, predict
 
 
 class TestPredictCliWrapper(unittest.TestCase):
-    @patch("scripts.predict.generate_predictions")
-    def test_predict_cli_forwards_args(self, mock_generate):
-        mock_generate.return_value = {
+    @patch("scripts.predict.build_model_service")
+    def test_predict_cli_forwards_args(self, mock_build_service):
+        mock_build_service.return_value.predict.return_value = {
             "predict_date": "2026-03-31",
             "lookback_start": "2025-10-01",
             "pool_size": 123,
@@ -26,13 +26,18 @@ class TestPredictCliWrapper(unittest.TestCase):
             with redirect_stdout(buf):
                 predict.main()
 
-        mock_generate.assert_called_once_with(date="2026-03-31", out="output/custom.csv")
+        mock_build_service.assert_called_once_with(refresh_settings=True)
+        mock_build_service.return_value.predict.assert_called_once_with(
+            date="2026-03-31",
+            out="output/custom.csv",
+        )
         output = buf.getvalue()
         self.assertIn("Predict date:", output)
         self.assertIn("Saved to:", output)
 
-    @patch("scripts.predict.generate_predictions", side_effect=RuntimeError("missing model"))
-    def test_predict_cli_shows_friendly_error(self, _mock_generate):
+    @patch("scripts.predict.build_model_service")
+    def test_predict_cli_shows_friendly_error(self, mock_build_service):
+        mock_build_service.return_value.predict.side_effect = RuntimeError("missing model")
         buf = io.StringIO()
         with patch("sys.argv", ["predict.py"]):
             with redirect_stdout(buf):
@@ -44,9 +49,9 @@ class TestPredictCliWrapper(unittest.TestCase):
 
 
 class TestBuildPortfolioCliWrapper(unittest.TestCase):
-    @patch("scripts.build_portfolio.build_portfolio_outputs")
+    @patch("scripts.build_portfolio.build_model_service")
     def test_build_portfolio_cli_forwards_args(self, mock_build):
-        mock_build.return_value = {
+        mock_build.return_value.build_portfolio.return_value = {
             "target_path": "output/target_weights_2026-03-31.csv",
             "orders_path": "output/orders_2026-03-31.csv",
             "stats": {"buy_count": 1, "sell_count": 2, "hold_count": 3, "turnover": 0.1},
@@ -70,7 +75,8 @@ class TestBuildPortfolioCliWrapper(unittest.TestCase):
             with redirect_stdout(buf):
                 build_portfolio.main()
 
-        mock_build.assert_called_once_with(
+        mock_build.assert_called_once_with(refresh_settings=True)
+        mock_build.return_value.build_portfolio.assert_called_once_with(
             date="2026-03-31",
             top_k=60,
             buy_rank=300,
@@ -82,8 +88,9 @@ class TestBuildPortfolioCliWrapper(unittest.TestCase):
         self.assertIn("Target weights saved:", output)
         self.assertIn("Orders saved:", output)
 
-    @patch("scripts.build_portfolio.build_portfolio_outputs", side_effect=RuntimeError("missing picks"))
+    @patch("scripts.build_portfolio.build_model_service")
     def test_build_portfolio_cli_shows_friendly_error(self, _mock_build):
+        _mock_build.return_value.build_portfolio.side_effect = RuntimeError("missing picks")
         buf = io.StringIO()
         with patch("sys.argv", ["build_portfolio.py"]):
             with redirect_stdout(buf):

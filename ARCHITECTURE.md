@@ -38,7 +38,7 @@ The Python side now follows a runtime-first layered design:
    - These files should stay shallow and delegate behavior downward
 
 3. Domain and infrastructure modules
-   - `model_function/`: reusable model-domain policy logic such as deterministic universe construction, prediction-pool rules, and holding buffers
+   - `model_function/`: reusable model-domain logic such as deterministic universe construction, prediction dataset/workflow assembly, recorder/model access, and analysis helpers
    - `data_pipeline/`: low-level BaoStock fetch provider and gateway HTTP client
    - `alpha_models/`: Qlib workflow and workflow runner
    - `backtesting/`: portfolio construction and order generation
@@ -68,7 +68,7 @@ Dependency direction:
 
 - `runtime.tasks.export_from_db()` exports all symbols from the gateway into `.data/receive_buffer/`.
 - `runtime.tasks.dump_to_qlib()` converts export CSVs into Qlib binary data.
-- `runtime.tasks.predict()` runs direct-call prediction generation, using `model_function/universe.py` for the deterministic lagged-liquidity prediction universe, and writes `output/top_picks_<date>.csv`.
+- `runtime.tasks.predict()` runs direct-call prediction generation, using `model_function/universe.py` for the deterministic lagged-liquidity prediction universe and `model_function/qlib.py` for shared recorder/model and dataset assembly helpers, and writes `output/top_picks_<date>.csv`.
 - `runtime.tasks.build_portfolio()` reads prediction output, applies explicit buy/hold buffer rules from `model_function/universe.py`, and writes target weights plus rebalance orders.
 
 ### Full Pipeline
@@ -76,8 +76,8 @@ Dependency direction:
 `fetch -> ingest -> export -> dump -> train -> predict -> portfolio`
 
 - `runtime.tasks.train_model()` calls the Qlib workflow through `ModelPipelineService.train_model()`.
-- The training workflow records `qlib_train` metadata for later predict/eval/view flows.
-- Successful training also triggers automatic view generation through `scripts.view.generate_view`.
+- `ModelPipelineService.train_model()` records `qlib_train` metadata for later predict/eval/view flows after the workflow completes successfully.
+- Successful training also triggers automatic view generation through the shared `model_function/qlib.py` analysis helper, with `scripts/view.py` remaining a thin wrapper.
 - Test-set evaluation remains a separate operator command (`scripts.eval_test`).
 
 ## 4. Configuration and State

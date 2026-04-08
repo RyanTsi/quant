@@ -60,7 +60,7 @@ graph LR
 |------|---------|
 | `main.py` | Unified CLI and scheduler entry |
 | `runtime/` | Canonical runtime orchestration, config, runlog, task registry, services, and workflow adapters |
-| `model_function/` | Shared model-domain helpers for universe construction, prediction-pool rules, and holding buffers |
+| `model_function/` | Shared model-domain helpers for universe construction, Qlib workflow assembly, recorder/model access, and analysis |
 | `data_pipeline/` | Low-level BaoStock fetch provider and C++ gateway client |
 | `alpha_models/` | Qlib training workflow and model configs |
 | `scripts/` | Thin standalone CLI wrappers (`update_data`, `put_data`, `predict`, `dump_bin`, `build_portfolio`, etc.) |
@@ -72,7 +72,7 @@ graph LR
 
 Current runtime notes:
 - `runtime/` is the canonical control plane and owns registry, task, orchestrator, runlog, and workflow-adapter behavior.
-- `model_function/` is the canonical Python-side home for reusable model-domain policy logic such as universe construction, deterministic sampling, and holding-buffer rules.
+- `model_function/` is the canonical Python-side home for reusable model-domain logic such as universe construction, deterministic sampling, holding-buffer rules, shared Qlib workflow assembly, and recorder/analysis helpers.
 - `main.py` and `scripts/*` are operator-facing entrypoints that delegate into runtime-owned paths.
 - Legacy compatibility shims such as `quantcore/*`, `config/settings.py`, and `utils/run_tracker.py` have been removed; use `runtime.services`, `runtime.config`, and `runtime.runlog` directly.
 

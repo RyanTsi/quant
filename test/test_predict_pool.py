@@ -13,6 +13,7 @@ import pandas as pd
 import yaml
 
 from model_function.universe import PredictionUniverseConfig
+from runtime.model_state import NO_TRAINED_MODEL_ERROR
 from utils.preprocess import ALPHA158_WEIGHTED_5D_LABEL
 
 
@@ -58,7 +59,13 @@ def _install_qlib_stubs_if_missing():
 
 
 _install_qlib_stubs_if_missing()
-from runtime.adapters.modeling import _build_today_pool, generate_predictions, get_predict_conf
+from runtime.adapters.modeling import (
+    TradingDateContext,
+    _build_today_pool,
+    _resolve_trading_date_context,
+    generate_predictions,
+    get_predict_conf,
+)
 
 
 class TestPredictPool(unittest.TestCase):
@@ -106,8 +113,10 @@ class TestPredictPool(unittest.TestCase):
             os.makedirs(".data", exist_ok=True)
             Path(".data/index_code_list").write_text("SH000001\n", encoding="utf-8")
 
-            with patch("runtime.adapters.modeling.settings") as mock_settings:
-                mock_settings.data_path = ".data"
+            with patch("runtime.adapters.modeling.build_model_runtime_state") as mock_runtime_state:
+                mock_runtime_state.return_value = types.SimpleNamespace(
+                    settings=types.SimpleNamespace(data_path=".data")
+                )
                 pool = _build_today_pool(calendar, "2026-03-31", seed=42)
 
             self.assertEqual(pool, ["SH600010"])
@@ -149,9 +158,60 @@ class TestPredictPool(unittest.TestCase):
             Path(".data/index_code_list").write_text("", encoding="utf-8")
 
             with patch("runtime.adapters.modeling.PREDICTION_UNIVERSE_DEFAULTS", PredictionUniverseConfig(entry_limit=3, exit_limit=5)):
-                with patch("runtime.adapters.modeling.settings") as mock_settings:
-                    mock_settings.data_path = ".data"
+                with patch("runtime.adapters.modeling.build_model_runtime_state") as mock_runtime_state:
+                    mock_runtime_state.return_value = types.SimpleNamespace(
+                        settings=types.SimpleNamespace(data_path=".data")
+                    )
                     pool = _build_today_pool(calendar, "2026-03-31", seed=42)
+
+            self.assertEqual(pool, ["A", "B", "C", "D"])
+        finally:
+            os.chdir(original_cwd)
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    @patch("runtime.adapters.modeling._get_qlib_data_client")
+    def test_prediction_pool_uses_previous_trading_day_across_weekend_gap(self, mock_get_d):
+        mock_d = MagicMock()
+        mock_get_d.return_value = mock_d
+        calendar = [
+            pd.Timestamp("2026-04-02"),
+            pd.Timestamp("2026-04-03"),
+            pd.Timestamp("2026-04-06"),
+        ]
+        instruments = ["A", "B", "C", "D", "E", "F"]
+        feats = pd.DataFrame(
+            {
+                "$amount": [600.0, 500.0, 400.0, 300.0, 200.0, 100.0],
+                "$close": [1.0] * 6,
+                "$volume": [1.0] * 6,
+                "$isst": [0.0] * 6,
+            },
+            index=pd.MultiIndex.from_tuples(
+                [(pd.Timestamp("2026-04-06"), instrument) for instrument in instruments],
+                names=["datetime", "instrument"],
+            ),
+        )
+        mock_d.features.return_value = feats
+        mock_d.instruments.return_value = "all"
+
+        original_cwd = os.getcwd()
+        tmp = tempfile.mkdtemp()
+        try:
+            os.chdir(tmp)
+            os.makedirs("output", exist_ok=True)
+            pd.DataFrame({"instrument": ["D"], "target_weight": [1.0]}).to_csv(
+                "output/target_weights_2026-04-03.csv",
+                index=False,
+            )
+            os.makedirs(".data", exist_ok=True)
+            Path(".data/index_code_list").write_text("", encoding="utf-8")
+
+            with patch("runtime.adapters.modeling.PREDICTION_UNIVERSE_DEFAULTS", PredictionUniverseConfig(entry_limit=3, exit_limit=5)):
+                with patch("runtime.adapters.modeling.build_model_runtime_state") as mock_runtime_state:
+                    mock_runtime_state.return_value = types.SimpleNamespace(
+                        settings=types.SimpleNamespace(data_path=".data")
+                    )
+                    pool = _build_today_pool(calendar, "2026-04-06", seed=42)
 
             self.assertEqual(pool, ["A", "B", "C", "D"])
         finally:
@@ -189,8 +249,10 @@ class TestPredictPool(unittest.TestCase):
             Path(".data/index_code_list").write_text("", encoding="utf-8")
 
             with patch("runtime.adapters.modeling.pd.read_csv", side_effect=ValueError("bad csv")):
-                with patch("runtime.adapters.modeling.settings") as mock_settings:
-                    mock_settings.data_path = ".data"
+                with patch("runtime.adapters.modeling.build_model_runtime_state") as mock_runtime_state:
+                    mock_runtime_state.return_value = types.SimpleNamespace(
+                        settings=types.SimpleNamespace(data_path=".data")
+                    )
                     pool = _build_today_pool(calendar, "2026-03-31", seed=42)
 
             self.assertEqual(pool, ["A", "B", "C"])
@@ -225,8 +287,10 @@ class TestPredictPool(unittest.TestCase):
             os.makedirs(".data", exist_ok=True)
             Path(".data/index_code_list").write_text("", encoding="utf-8")
 
-            with patch("runtime.adapters.modeling.settings") as mock_settings:
-                mock_settings.data_path = ".data"
+            with patch("runtime.adapters.modeling.build_model_runtime_state") as mock_runtime_state:
+                mock_runtime_state.return_value = types.SimpleNamespace(
+                    settings=types.SimpleNamespace(data_path=".data")
+                )
                 first = _build_today_pool(calendar, "2026-03-31", seed=42)
                 second = _build_today_pool(calendar, "2026-03-31", seed=7)
 
@@ -236,21 +300,51 @@ class TestPredictPool(unittest.TestCase):
             os.chdir(original_cwd)
             shutil.rmtree(tmp, ignore_errors=True)
 
-    @patch("runtime.adapters.modeling._resolve_recorder_ids", return_value=("rec_1", "exp_1"))
+    def test_resolve_trading_date_context_defaults_to_latest_local_trading_day(self):
+        calendar = [pd.Timestamp("2026-04-02"), pd.Timestamp("2026-04-03"), pd.Timestamp("2026-04-06")]
+
+        context = _resolve_trading_date_context(calendar, None)
+
+        self.assertEqual(
+            context,
+            TradingDateContext(
+                trading_date="2026-04-06",
+                previous_trading_date="2026-04-03",
+            ),
+        )
+
+    def test_resolve_trading_date_context_rejects_non_trading_day(self):
+        calendar = [pd.Timestamp("2026-04-02"), pd.Timestamp("2026-04-03"), pd.Timestamp("2026-04-06")]
+
+        with self.assertRaisesRegex(ValueError, "not in local trading calendar"):
+            _resolve_trading_date_context(calendar, "2026-04-04")
+
     @patch("runtime.adapters.modeling._build_today_pool", return_value=["SH600000"])
     @patch("runtime.adapters.modeling._get_qlib_data_client")
     @patch("runtime.adapters.modeling._get_qlib_runtime")
+    @patch("runtime.adapters.modeling.build_model_runtime_state")
     def test_generate_predictions_direct_call_writes_output(
         self,
+        mock_build_runtime_state,
         mock_get_runtime,
         mock_get_d,
         _mock_pool,
-        _mock_resolve_ids,
     ):
         calendar = [pd.Timestamp("2026-03-30"), pd.Timestamp("2026-03-31")]
         mock_d = MagicMock()
         mock_d.calendar.return_value = calendar
         mock_get_d.return_value = mock_d
+        mock_build_runtime_state.return_value = types.SimpleNamespace(
+            settings=types.SimpleNamespace(
+                qlib_provider_uri="provider://default",
+                qlib_mlruns_uri="mlruns://default",
+                data_path=".data",
+            ),
+            resolve_recorder_identity=lambda **_: types.SimpleNamespace(
+                recorder_id="rec_1",
+                experiment_id="exp_1",
+            ),
+        )
 
         model = MagicMock()
         pred_index = pd.MultiIndex.from_tuples(
@@ -266,12 +360,7 @@ class TestPredictPool(unittest.TestCase):
         mock_get_runtime.return_value = (MagicMock(), "cn", recorder_client, lambda _conf: "dataset")
 
         with tempfile.TemporaryDirectory() as tmp:
-            with patch("runtime.adapters.modeling.settings") as mock_settings:
-                mock_settings.qlib_provider_uri = "provider://default"
-                mock_settings.qlib_mlruns_uri = "mlruns://default"
-                mock_settings.data_path = ".data"
-
-                result = generate_predictions(date="2026-03-31", output_dir=tmp)
+            result = generate_predictions(date="2026-03-31", output_dir=tmp)
 
             out_path = Path(result["output_path"])
             self.assertTrue(out_path.exists())
@@ -279,6 +368,34 @@ class TestPredictPool(unittest.TestCase):
             self.assertIn("Score", out_df.columns)
             self.assertEqual(result["predict_date"], "2026-03-31")
             self.assertEqual(result["pool_size"], 1)
+
+    @patch("runtime.adapters.modeling._build_today_pool", return_value=["SH600000"])
+    @patch("runtime.adapters.modeling._get_qlib_data_client")
+    @patch("runtime.adapters.modeling._get_qlib_runtime")
+    @patch("runtime.adapters.modeling.build_model_runtime_state")
+    def test_generate_predictions_fails_fast_without_env_or_training_run(
+        self,
+        mock_build_runtime_state,
+        mock_get_runtime,
+        mock_get_d,
+        _mock_pool,
+    ):
+        calendar = [pd.Timestamp("2026-03-30"), pd.Timestamp("2026-03-31")]
+        mock_d = MagicMock()
+        mock_d.calendar.return_value = calendar
+        mock_get_d.return_value = mock_d
+        mock_get_runtime.return_value = (MagicMock(), "cn", MagicMock(), lambda _conf: "dataset")
+        mock_build_runtime_state.return_value = types.SimpleNamespace(
+            settings=types.SimpleNamespace(
+                qlib_provider_uri="provider://default",
+                qlib_mlruns_uri="mlruns://default",
+                data_path=".data",
+            ),
+            resolve_recorder_identity=lambda **_: (_ for _ in ()).throw(RuntimeError(NO_TRAINED_MODEL_ERROR)),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, NO_TRAINED_MODEL_ERROR):
+            generate_predictions(date="2026-03-31", output_dir="output")
 
 
 if __name__ == "__main__":

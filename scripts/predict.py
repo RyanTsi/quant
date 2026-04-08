@@ -7,7 +7,8 @@ Usage:
 """
 
 import argparse
-from runtime.adapters.modeling import generate_predictions
+
+from runtime.services import build_model_service
 
 
 def main():
@@ -17,7 +18,8 @@ def main():
     args = parser.parse_args()
 
     try:
-        result = generate_predictions(date=args.date, out=args.out)
+        model_service = build_model_service(refresh_settings=True)
+        result = model_service.predict(date=args.date, out=args.out)
     except Exception as exc:
         # Keep CLI failure surface concise for operator-facing runs.
         print(f"Prediction failed: {exc}")

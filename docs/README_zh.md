@@ -60,7 +60,7 @@ graph LR
 |------|------|
 | `main.py` | 统一 CLI 与调度入口 |
 | `runtime/` | 规范运行时编排、配置、runlog、任务注册、services 与 workflow adapters |
-| `model_function/` | 模型域复用逻辑：股票池构建、预测池规则、持仓缓冲与后续模型功能沉淀位置 |
+| `model_function/` | 模型域复用逻辑：股票池构建、Qlib workflow 装配、recorder/模型访问与分析 helper 的沉淀位置 |
 | `data_pipeline/` | 底层 BaoStock 抓取 provider 与 C++ 网关客户端 |
 | `alpha_models/` | Qlib 训练工作流与模型配置 |
 | `scripts/` | 薄独立 CLI wrapper（`update_data`、`put_data`、`predict`、`dump_bin`、`build_portfolio` 等） |
@@ -72,7 +72,7 @@ graph LR
 
 当前运行时说明：
 - `runtime/` 已是规范控制面，并持有 registry、task、orchestrator、runlog 和 workflow adapter 行为。
-- `model_function/` 是当前 Python 侧模型域规则的规范归属，承载股票池契约、确定性采样和持仓缓冲等可复用逻辑。
+- `model_function/` 是当前 Python 侧模型域逻辑的规范归属，承载股票池契约、确定性采样、持仓缓冲，以及共享 Qlib workflow 装配和 recorder/分析 helper 等可复用能力。
 - `main.py` 与 `scripts/*` 是面向操作的入口，它们只负责调用 runtime 持有的路径。
 - `quantcore/*`、`config/settings.py` 与 `utils/run_tracker.py` 等历史兼容壳已经删除；如需对应能力，请直接使用 `runtime.services`、`runtime.config` 与 `runtime.runlog`。
 

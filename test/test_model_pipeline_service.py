@@ -2,11 +2,13 @@
 
 import os
 import tempfile
+import types
 import unittest
 from dataclasses import replace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from runtime.config import load_settings
+from runtime.model_state import NO_TRAINED_MODEL_ERROR
 from runtime.runlog import RunLogStore
 import runtime.services as model_service_module
 from runtime.services import ModelPipelineService
@@ -76,6 +78,13 @@ class TestModelPipelineService(unittest.TestCase):
         mock_predict,
         mock_build_portfolio,
     ):
+        mock_runtime_state = Mock()
+        recorder_identity = types.SimpleNamespace(
+            experiment_id="exp-1",
+            recorder_id="rec-1",
+        )
+        mock_runtime_state.resolve_recorder_identity.return_value = recorder_identity
+        self.service.runtime_state = mock_runtime_state
         mock_predict.return_value = {
             "predict_date": "2026-04-01",
             "lookback_start": "2025-10-01",
@@ -94,8 +103,23 @@ class TestModelPipelineService(unittest.TestCase):
 
         predict_result = self.service.predict()
         portfolio_result = self.service.build_portfolio()
-        mock_predict.assert_called_once_with()
-        mock_build_portfolio.assert_called_once_with(track_run=False)
+        mock_runtime_state.resolve_recorder_identity.assert_called_once_with()
+        mock_predict.assert_called_once_with(
+            date=None,
+            out=None,
+            runtime_state=mock_runtime_state,
+            recorder_identity=recorder_identity,
+        )
+        mock_build_portfolio.assert_called_once_with(
+            date=None,
+            top_k=80,
+            max_weight=0.02,
+            rebalance_threshold=0.002,
+            buy_rank=300,
+            hold_rank=500,
+            track_run=False,
+            runtime_state=mock_runtime_state,
+        )
         self.assertEqual(predict_result["predict_date"], "2026-04-01")
         self.assertEqual(portfolio_result["target_path"], "output/target_weights_2026-04-01.csv")
 
@@ -110,6 +134,74 @@ class TestModelPipelineService(unittest.TestCase):
         self.assertEqual(portfolio_entry["target_file"], "output/target_weights_2026-04-01.csv")
         self.assertEqual(portfolio_entry["orders_file"], "output/orders_2026-04-01.csv")
         self.assertEqual(portfolio_entry["turnover"], 0.1)
+
+    @patch("runtime.services.modeling.generate_predictions")
+    def test_predict_uses_service_owned_runtime_state_for_recorder_resolution(self, mock_predict):
+        mock_runtime_state = Mock()
+        recorder_identity = types.SimpleNamespace(
+            experiment_id="exp-service",
+            recorder_id="rec-service",
+        )
+        mock_runtime_state.resolve_recorder_identity.return_value = recorder_identity
+        self.service.runtime_state = mock_runtime_state
+        mock_predict.return_value = {
+            "predict_date": "2026-04-01",
+            "lookback_start": "2025-10-01",
+            "pool_size": 10,
+            "recorder_id": "rec-service",
+            "experiment_id": "exp-service",
+            "output_path": "output/top_picks_2026-04-01.csv",
+        }
+
+        self.service.predict()
+
+        mock_runtime_state.resolve_recorder_identity.assert_called_once_with()
+        mock_predict.assert_called_once_with(
+            date=None,
+            out=None,
+            runtime_state=mock_runtime_state,
+            recorder_identity=recorder_identity,
+        )
+
+    @patch("runtime.services.modeling.generate_predictions")
+    def test_predict_forwards_explicit_args(self, mock_predict):
+        mock_runtime_state = Mock()
+        recorder_identity = types.SimpleNamespace(
+            experiment_id="exp-explicit",
+            recorder_id="rec-explicit",
+        )
+        mock_runtime_state.resolve_recorder_identity.return_value = recorder_identity
+        self.service.runtime_state = mock_runtime_state
+        mock_predict.return_value = {
+            "predict_date": "2026-04-02",
+            "lookback_start": "2025-10-02",
+            "pool_size": 12,
+            "recorder_id": "rec-explicit",
+            "experiment_id": "exp-explicit",
+            "output_path": "output/custom.csv",
+        }
+
+        self.service.predict(date="2026-04-02", out="output/custom.csv")
+
+        mock_predict.assert_called_once_with(
+            date="2026-04-02",
+            out="output/custom.csv",
+            runtime_state=mock_runtime_state,
+            recorder_identity=recorder_identity,
+        )
+
+    @patch("runtime.services.modeling.generate_predictions")
+    def test_predict_fails_fast_when_no_env_or_training_run_exists(self, mock_predict):
+        mock_runtime_state = Mock()
+        mock_runtime_state.resolve_recorder_identity.side_effect = RuntimeError(NO_TRAINED_MODEL_ERROR)
+        self.service.runtime_state = mock_runtime_state
+
+        with self.assertRaisesRegex(RuntimeError, NO_TRAINED_MODEL_ERROR):
+            self.service.predict()
+
+        mock_runtime_state.resolve_recorder_identity.assert_called_once_with()
+        mock_predict.assert_not_called()
+        self.assertIsNone(self.history.get("predict"))
 
     @patch("runtime.services.modeling.build_training_universe_file")
     def test_build_training_universe_uses_direct_adapter(self, mock_build):
@@ -155,6 +247,13 @@ class TestModelPipelineService(unittest.TestCase):
         mock_predict,
         mock_build_portfolio,
     ):
+        mock_runtime_state = Mock()
+        recorder_identity = types.SimpleNamespace(
+            experiment_id="exp-1",
+            recorder_id="rec-1",
+        )
+        mock_runtime_state.resolve_recorder_identity.return_value = recorder_identity
+        self.service.runtime_state = mock_runtime_state
         # Predict fail first: no success record should be written.
         mock_predict.side_effect = [
             RuntimeError("predict failed"),
@@ -207,9 +306,54 @@ class TestModelPipelineService(unittest.TestCase):
 
     @patch("runtime.services._run_qlib_training")
     def test_train_model_calls_workflow_entry(self, mock_main):
-        self.service.train_model()
-        mock_main.assert_called_once()
-        self.assertIsNotNone(self.history.get("train_model"))
+        mock_main.return_value = types.SimpleNamespace(
+            config_source="cfg.yaml",
+            experiment_id="exp_1",
+            recorder_id="rec_1",
+            metrics=None,
+        )
+
+        with patch.object(self.service, "_today_dash", return_value="2026-04-01"):
+            result = self.service.train_model()
+
+        mock_main.assert_called_once_with(self.service.runtime_state)
+        self.assertEqual(result, {"date": "2026-04-01"})
+        self.assertEqual(self.history.get("train_model")["date"], "2026-04-01")
+        qlib_train_entry = self.history.get("qlib_train")
+        self.assertIsNotNone(qlib_train_entry)
+        self.assertEqual(qlib_train_entry["config_source"], "cfg.yaml")
+        self.assertEqual(qlib_train_entry["experiment_id"], "exp_1")
+
+    @patch("runtime.services.modeling.build_portfolio_outputs")
+    def test_build_portfolio_forwards_explicit_args(self, mock_build_portfolio):
+        mock_build_portfolio.return_value = {
+            "date": "2026-04-02",
+            "picks_path": "output/top_picks_2026-04-02.csv",
+            "target_path": "output/target_weights_2026-04-02.csv",
+            "orders_path": "output/orders_2026-04-02.csv",
+            "stats": {"turnover": 0.2},
+        }
+
+        self.service.build_portfolio(
+            date="2026-04-02",
+            top_k=60,
+            buy_rank=250,
+            hold_rank=400,
+            max_weight=0.03,
+            rebalance_threshold=0.005,
+        )
+
+        mock_build_portfolio.assert_called_once_with(
+            date="2026-04-02",
+            top_k=60,
+            max_weight=0.03,
+            rebalance_threshold=0.005,
+            buy_rank=250,
+            hold_rank=400,
+            track_run=False,
+            runtime_state=self.service.runtime_state,
+        )
+        self.assertEqual(self.history.get("build_portfolio")["target_file"], "output/target_weights_2026-04-02.csv")
 
 
 if __name__ == "__main__":
