@@ -69,7 +69,6 @@ class StockDataFetcher:
             if os.path.exists(file_path):
                 continue
             history_df = self.fetch_history_data_via_baostock(symbol, start_date, end_date)
-            time.sleep(1.0)
             if history_df is not None and not history_df.empty:
                 history_df.to_csv(file_path, index=False)
             else:

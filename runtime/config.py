@@ -77,7 +77,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> AppSettings:
         qlib_provider_uri=qlib_provider_uri,
         qlib_mlruns_uri=qlib_mlruns_uri,
         qlib_experiment_name=source.get("QLIB_EXPERIMENT_NAME", "quant_experiment"),
-        qlib_recorder_id=source.get("QLIB_RECORDER_ID", "2402492ab7f04440b8fceb480840cc5a"),
+        qlib_recorder_id=source.get("QLIB_RECORDER_ID", "393d3bc5ae3f413a89c1cbef25aab32f"),
         qlib_experiment_id=source.get("QLIB_EXPERIMENT_ID", "790466824366979584"),
         qlib_workflow_config=source.get(
             "QLIB_WORKFLOW_CONFIG",
